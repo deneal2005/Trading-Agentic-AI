@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tradeintel"
+version = "0.1.0"
+description = "Local-first AI trading research and demo-trading system"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.1",
+  "pyyaml>=6.0",
+  "pydantic>=2.5",
+  "requests>=2.31",
+  "feedparser>=6.0",
+  "scikit-learn>=1.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+yahoo = ["yfinance>=0.2.40"]
+
+[project.scripts]
+tradeintel = "tradeintel.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

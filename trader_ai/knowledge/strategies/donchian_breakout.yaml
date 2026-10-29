@@ -1,0 +1,26 @@
+name: donchian_breakout
+family: breakout
+version: 1
+status: research
+evidence_level: empirical_observation
+hypothesis: >
+  Closes beyond an N-bar range signal the start of a directional move
+  (volatility expansion / trend initiation). Closely related to time-series momentum.
+market_conditions: Trending, expanding-volatility regimes; fails in choppy ranges with false breakouts.
+entry_rules: Long when close > highest high of the previous entry_n bars; short when close < lowest low of the previous entry_n bars.
+exit_rules: Long exits when close < lowest low of previous exit_n bars (short symmetric), or ATR stop.
+data_and_indicators: [daily OHLC, Donchian channels (entry_n, exit_n), ATR(20)]
+stop_and_sizing: Stop = atr_mult x ATR(20); risk-based sizing as in the risk policy.
+holding_period: Weeks to months.
+cost_assumptions: As configured; breakout fills are often worse than the open in fast markets, so slippage is stress-tested at 2x.
+failure_modes:
+  - False breakouts, especially around scheduled news
+  - Low win rate (often 30-40%), so long losing streaks are normal and psychologically hard
+  - Edge reported in the 1980s turtle era may have decayed
+evidence:
+  - "Turtle trading rules (Faith, 2007, Way of the Turtle) - practitioner account, not peer reviewed."
+  - "Related academic evidence: time-series momentum literature (see sma_cross)."
+backtest_results: See EXPERIMENTS.md.
+disable_when:
+  - Consecutive-loss safeguard trips twice in a quarter
+  - OOS profit factor < 1 over the last 50 trades

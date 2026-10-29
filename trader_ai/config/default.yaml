@@ -1,0 +1,97 @@
+# Default configuration. Override with config/local.yaml (git-ignored) or
+# TRADEINTEL_* environment variables. All values here are starting
+# assumptions, documented in PROJECT_PLAN.md, and meant to be changed.
+
+paths:
+  data_dir: var/data
+  db_path: var/tradeintel.sqlite
+  reports_dir: var/reports
+  models_dir: var/models
+  kill_switch_file: var/KILL_SWITCH
+
+market:
+  asset_class: forex
+  instrument: EURUSD
+  timeframe: 1d
+  account_currency: USD
+  # Price units per pip for this instrument.
+  pip_size: 0.0001
+
+data:
+  # yahoo | stooq | csv | synthetic
+  provider: yahoo
+  start: "2010-01-01"
+  csv_path: null
+  # Bars older than this (in multiples of the timeframe) are treated as stale.
+  max_staleness_bars: 3
+
+costs:
+  # Conservative retail-FX assumptions; see RESEARCH_SOURCES.md.
+  spread_pips: 1.2
+  slippage_pips: 0.5
+  commission_per_million: 0.0
+  # Annualised financing (swap) cost on notional held overnight, both sides.
+  financing_rate_annual: 0.01
+
+backtest:
+  initial_equity: 10000.0
+  # Fraction of the dataset never touched by research runs (holdout).
+  holdout_fraction: 0.2
+  walkforward:
+    train_bars: 750
+    test_bars: 250
+
+risk:
+  max_risk_per_trade: 0.005        # 0.5% of equity at the stop
+  max_open_risk: 0.015             # aggregate risk across open positions
+  max_daily_loss: 0.02
+  max_drawdown: 0.10               # from equity high-water mark
+  max_leverage: 5.0
+  max_position_units: 500000
+  max_positions_per_instrument: 1
+  max_correlated_exposure: 2       # positions sharing a currency, same direction
+  max_spread_pips: 3.0
+  max_consecutive_losses: 5
+  event_blackout_minutes: 30       # no new orders around high-impact events
+  require_stop_loss: true
+
+news:
+  rss_feeds:
+    - {name: federal_reserve, url: "https://www.federalreserve.gov/feeds/press_all.xml", reliability: official}
+    - {name: ecb, url: "https://www.ecb.europa.eu/rss/press.html", reliability: official}
+    - {name: bank_of_england, url: "https://www.bankofengland.co.uk/rss/news", reliability: official}
+  # Forex Factory publishes a weekly calendar export; respect its terms and
+  # poll sparingly (the export is refreshed only a few times per hour).
+  forexfactory_calendar_url: "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+  poll_seconds: 900
+  request_timeout_seconds: 20
+
+llm:
+  provider: none          # none | ollama | anthropic
+  ollama_model: qwen2.5:7b-instruct
+  anthropic_model: claude-sonnet-5-5
+  timeout_seconds: 60
+  max_input_chars: 6000
+
+promotion:
+  # Placeholder thresholds. They must be revisited once the market,
+  # timeframe and risk budget are confirmed (see RISK_POLICY.md).
+  min_trades: 60
+  min_oos_sharpe: 0.5
+  max_oos_drawdown: 0.15
+  min_profit_factor: 1.1
+  must_beat_baselines: [no_trade, buy_and_hold]
+  max_cost_stress_multiplier_loss: 2.0  # must stay profitable at 2x costs
+
+execution:
+  enabled: false          # master switch for any order submission
+  broker: paper           # paper | oanda
+  allow_live: false       # code refuses live regardless; kept for clarity
+
+live:
+  # Strategy run by `tradeintel run-once` / `tradeintel service`.
+  strategy: sma_cross
+  params: {}
+  # Orders are only sent for a strategy with a recorded 'promotable'
+  # walk-forward verdict on non-synthetic data (see RISK_POLICY.md).
+  require_promotion: true

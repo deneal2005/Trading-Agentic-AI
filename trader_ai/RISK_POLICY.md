@@ -1,0 +1,47 @@
+# Risk policy
+
+The risk engine (`src/tradeintel/risk/engine.py`) is deterministic and independent of every AI component. It evaluates every order intent. A rejection can't be overridden by any strategy, model, agent, news item or retrieved document. Configuration changes require editing `config/` (or env vars) and restarting. Nothing at runtime writes risk configuration.
+
+## Default limits (starting assumptions, `config/default.yaml`)
+
+| Control | Default | Effect when breached |
+|---|---|---|
+| Max risk per trade (entry→stop, account ccy) | 0.5% equity | reject |
+| Max aggregate open risk | 1.5% equity | reject. A position without a stop counts as infinite risk |
+| Max daily loss (vs day-start equity) | 2% | reject **and engage kill switch** |
+| Max drawdown (vs high-water mark) | 10% | reject **and engage kill switch** |
+| Max leverage (total notional / equity) | 5x | reject |
+| Max units per position | 500,000 | reject |
+| Positions per instrument | 1 | reject |
+| Correlated exposure (same direction on one currency) | 2 positions | reject |
+| Max spread | 3 pips | reject |
+| Quote staleness | 30 s | reject |
+| Price consistency (order vs quote) | 1% | reject |
+| Consecutive losses | 5 | reject new entries (pause and review) |
+| Event blackout | ±30 min around high-impact events for either currency | reject |
+| Stop-loss required | yes, on the correct side | reject |
+| Duplicate order key | reject (keys persisted in the audit log, survive restart) | reject |
+| Account environment | paper or practice only | reject. The pipeline raises on a live account |
+| Missing / NaN / non-positive inputs | | reject |
+
+## Kill switch
+- File: `var/KILL_SWITCH` (JSON with reason and time). It survives restarts.
+- It engages automatically on a daily-loss or drawdown breach, or manually with `tradeintel risk kill --reason ...`.
+- `ExecutionPipeline.emergency_stop()` engages it and closes all positions.
+- Only a human can clear it, with `tradeintel risk reset`, which requires typing `RESET`. Review the cause first.
+
+## Promotion criteria (placeholders until the target market and risk budget are confirmed)
+A strategy may be used for demo orders only with a `promotable` walk-forward verdict on non-synthetic data. That requires all of:
+- at least 60 out-of-sample trades
+- OOS Sharpe ≥ 0.5, and a bootstrap 90% CI lower bound > 0
+- OOS max drawdown ≤ 15%
+- profit factor ≥ 1.1
+- beats both the no-trade and buy-and-hold baselines on Sharpe and net return
+- still profitable at 2x costs
+
+After promotion, a single holdout test (`tradeintel holdout`) should confirm the result before demo use. That step is a manual requirement and isn't enforced in code yet. See PROJECT_PLAN.
+
+These thresholds are deliberately modest placeholders, not evidence of profitability. They must be set from your risk budget before demo trading.
+
+## Live trading
+Not supported. `execution.allow_live: true` fails config validation. The OANDA client is hard-wired to the practice host and refuses `OANDA_ENVIRONMENT != practice`. The pipeline raises `BrokerError` if a broker reports a live account. Enabling live trading would need code changes, review and a separate decision. It must never happen silently.

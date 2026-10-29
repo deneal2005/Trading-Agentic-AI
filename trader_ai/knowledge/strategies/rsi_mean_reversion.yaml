@@ -1,0 +1,26 @@
+name: rsi_mean_reversion
+family: mean_reversion
+version: 1
+status: research
+evidence_level: hypothesis
+hypothesis: >
+  Short-term overreactions partially reverse; extreme RSI readings mark
+  stretched prices that tend to revert toward the recent mean.
+market_conditions: Range-bound, low-trend regimes; dangerous in strong trends and around regime-changing news.
+entry_rules: Long when RSI(period) < lower; short when RSI > 100 - lower. Fill at next open.
+exit_rules: RSI crosses back through exit_level, or max_hold bars elapse, or ATR stop.
+data_and_indicators: [daily OHLC, RSI(period), ATR(14)]
+stop_and_sizing: Stop = atr_mult x ATR(14); risk-based sizing.
+holding_period: Days.
+cost_assumptions: Higher turnover than trend strategies, so costs matter more; always check the 2x cost stress result.
+failure_modes:
+  - Catching a falling knife in trends (losses larger than wins)
+  - High win rate can hide negative expectancy
+  - Evidence for short-horizon reversal is stronger in equities than in major FX pairs
+evidence:
+  - "Lehmann (1990), Fads, martingales and market efficiency, QJE - short-term reversal in equities."
+  - "Connors & Alvarez (2009), Short Term Trading Strategies That Work - practitioner, equity indices, not peer reviewed."
+backtest_results: See EXPERIMENTS.md.
+disable_when:
+  - Trend regime detected (|100-bar MA slope| > threshold) - candidate regime filter, untested
+  - Expectancy per trade (R) < 0 over last 40 trades

@@ -1,0 +1,28 @@
+name: sma_cross
+family: trend_following
+version: 1
+status: research            # research | candidate | demo | retired
+evidence_level: research_finding
+hypothesis: >
+  Asset returns show time-series momentum over weeks to months; a fast/slow
+  moving-average crossover captures part of this persistence.
+market_conditions: Persistent trends; tends to suffer in range-bound, mean-reverting regimes.
+entry_rules: Long when SMA(fast) > SMA(slow) at the close; short when below. Fill at next open.
+exit_rules: Opposite crossover (reverse), or ATR stop-loss. No re-entry in the same direction after a stop until the signal changes.
+data_and_indicators: [daily OHLC, SMA(fast), SMA(slow), ATR(14)]
+stop_and_sizing: Stop = atr_mult x ATR(14) from fill; units = equity x risk_per_trade / stop distance, capped by leverage.
+holding_period: Weeks to months.
+cost_assumptions: Spread 1.2 pips + 0.5 pip slippage per side; 1% p.a. financing on notional (config costs).
+failure_modes:
+  - Whipsaw losses in sideways markets
+  - Late entries and exits; gives back open profit at reversals
+  - Parameter sensitivity; optimised windows overfit easily
+evidence:
+  - "Moskowitz, Ooi & Pedersen (2012), Time series momentum, Journal of Financial Economics 104(2)."
+  - "Hurst, Ooi & Pedersen (2017), A century of evidence on trend-following investing, Journal of Portfolio Management."
+  - "Menkhoff, Sarno, Schmeling & Schrimpf (2012), Currency momentum strategies, Journal of Financial Economics 106(3)."
+  - "Caveat: published evidence is mostly for diversified portfolios, not a single FX pair; single-instrument results are much noisier."
+backtest_results: See EXPERIMENTS.md (none on real data yet).
+disable_when:
+  - Rolling 12-month OOS Sharpe < 0 and drawdown > 1.5x backtest max drawdown
+  - Live spread or slippage persistently > 2x assumptions

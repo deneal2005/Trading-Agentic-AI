@@ -1,0 +1,27 @@
+# Reference repositories ingested into the knowledge base (Markdown only).
+# Licenses verified from each repo's LICENSE / plugin.json on 2026-10-29.
+sources:
+  - name: day-trader-skill
+    url: https://github.com/Jakeschincariol/day-trader-skill.git
+    license: MIT
+    default_evidence_level: unverified_claim
+  - name: tradingagents
+    url: https://github.com/vongchu/TradingAgents_TauricResearch.git
+    license: Apache-2.0
+    default_evidence_level: unverified_claim
+  - name: trading-skills-staskh
+    url: https://github.com/staskh/trading_skills.git
+    license: MIT
+    default_evidence_level: unverified_claim
+  - name: claude-trading-skills
+    url: https://github.com/tradermonty/claude-trading-skills.git
+    license: MIT
+    default_evidence_level: unverified_claim
+  - name: trader-skill
+    url: https://github.com/Jakeschincariol/trader-skill.git
+    license: MIT
+    default_evidence_level: unverified_claim
+  - name: trade-skills-himself65
+    url: https://github.com/himself65/trade-skills.git
+    license: MIT (declared in plugin.json; no LICENSE file)
+    default_evidence_level: unverified_claim

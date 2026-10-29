@@ -1,0 +1,25 @@
+name: news_event_blackout
+family: news_informed
+version: 1
+status: research
+evidence_level: research_finding
+hypothesis: >
+  Scheduled macro announcements cause jumps and spread widening in FX.
+  Avoiding new entries just before high-impact releases may reduce tail
+  losses and slippage for technical strategies, at the cost of missed moves.
+market_conditions: Applies as an overlay to any strategy trading the affected currencies.
+entry_rules: Overlay only - blocks new entries (no_entry mode) or forces flat (flat mode) when a high-impact event for either currency of the pair is scheduled during the next holding bar.
+exit_rules: Inherited from the base strategy.
+data_and_indicators: [economic calendar with scheduled times and impact ratings]
+stop_and_sizing: Inherited; risk engine additionally enforces a +/- event_blackout_minutes window on live orders.
+holding_period: Inherited.
+cost_assumptions: Reduces exposure to event-time spread widening, which the backtest does not model explicitly (limitation).
+failure_modes:
+  - Calendar errors or missing events (Forex Factory is unofficial)
+  - Daily bars are too coarse to isolate the announcement window
+  - May remove the most profitable trades for breakout strategies
+evidence:
+  - "Andersen, Bollerslev, Diebold & Vega (2003), Micro effects of macro announcements: real-time price discovery in foreign exchange, American Economic Review 93(1)."
+backtest_results: Measured with `tradeintel news ablation`; see EXPERIMENTS.md.
+disable_when:
+  - Ablation shows no improvement in drawdown or tail loss over at least two independent periods

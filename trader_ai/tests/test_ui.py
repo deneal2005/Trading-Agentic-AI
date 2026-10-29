@@ -147,11 +147,27 @@ def test_kill_action_engages_switch_and_says_positions_stay_open(server, setting
     assert any(a["title"].startswith("Emergency stop is on") for a in st["alerts"])
 
 
+def run_action(port, name, body=None):
+    """Start an action (a background job) and follow it to the end, like the page does."""
+    import time
+    started = json.loads(post(port, f"/api/actions/{name}", body or {})[1])
+    assert started["ok"] and started["job"]["state"] in ("running", "succeeded", "failed")
+    for _ in range(300):
+        job = json.loads(call(port, "GET", f"/api/jobs/{started['job']['id']}")[1])
+        if job["state"] != "running":
+            return job
+        time.sleep(0.1)
+    raise AssertionError("job never finished")
+
+
 def test_backtest_action_is_labelled_in_sample_and_validates_input(server):
-    body = json.loads(post(server, "/api/actions/backtest", {"strategy": "sma_cross"})[1])
+    job = run_action(server, "backtest", {"strategy": "sma_cross"})
+    body = job["result"]
+    assert job["state"] == "succeeded" and job["done_steps"] == ["Running the backtest", "Comparing with buy-and-hold"]
     assert body["ok"] and "in-sample" in body["warning"] and body["equity"] and body["source"] == "SYNTHETIC"
-    assert json.loads(post(server, "/api/actions/backtest", {"strategy": "nope"})[1])["ok"] is False
-    assert json.loads(post(server, "/api/actions/research", {"strategy": "buy_and_hold"})[1])["ok"] is False
+    bad = run_action(server, "backtest", {"strategy": "nope"})
+    assert bad["state"] == "failed" and "unknown strategy" in bad["error"]
+    assert run_action(server, "research", {"strategy": "buy_and_hold"})["state"] == "failed"
 
 
 # ------------------------------------------------------------ companion

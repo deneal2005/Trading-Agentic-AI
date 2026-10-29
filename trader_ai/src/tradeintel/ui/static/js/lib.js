@@ -223,6 +223,7 @@ export function toast(msg, tone = '', { sticky = false } = {}) {
   box.append(t);
   let timer = sticky ? null : setTimeout(() => t.remove(), 7000);
   return {
+    set(m) { t.replaceChildren(m); },  // change the text, keep it on screen
     update(m, tn = '') { t.className = `toast ${tn}`; t.replaceChildren(m); clearTimeout(timer); timer = setTimeout(() => t.remove(), 9000); },
     close() { clearTimeout(timer); t.remove(); },
   };

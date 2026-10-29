@@ -81,6 +81,21 @@ class AlpacaPaperBroker(Broker):
             out += [{k: leg.get(k) for k in keep} for leg in o.get("legs") or []]
         return out
 
+    def order_status(self, client_id: str) -> dict | None:
+        """Final state of an order we sent, by our own key. None if the broker doesn't know it."""
+        try:
+            o = self._req("GET", f"{self.base}/v2/orders:by_client_order_id", params={"client_order_id": client_id[:128]})
+        except BrokerError as e:
+            if "404" in str(e):
+                return None
+            raise
+        st = o.get("status")
+        mapped = {"filled": "filled", "partially_filled": "partially_filled", "canceled": "cancelled", "expired": "cancelled",
+                  "done_for_day": "cancelled", "rejected": "rejected"}.get(st, "pending")
+        return {"status": mapped, "broker_status": st,
+                "fill_price": float(o["filled_avg_price"]) if o.get("filled_avg_price") else None,
+                "filled_units": float(o.get("filled_qty") or 0)}
+
     def positions(self):
         return [BrokerPosition(p["symbol"], abs(float(p["qty"])) * (1 if p["side"] == "long" else -1),
                                float(p["avg_entry_price"]), None)

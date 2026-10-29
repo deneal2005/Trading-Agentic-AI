@@ -50,6 +50,30 @@ class ExecutionPipeline:
             return {r[0] for r in con.execute("SELECT idempotency_key FROM audit WHERE order_result LIKE '%filled%' "
                                               "OR order_result LIKE '%\"pending\"%'")}
 
+    def reconcile(self) -> int:
+        """Ask the broker what became of orders still marked 'pending' and record the answer.
+        Brokers without a status lookup (internal paper fills at once; OANDA not built) are skipped."""
+        if not hasattr(self.broker, "order_status"):
+            return 0
+        with connect(self.db) as con:
+            rows = con.execute("SELECT id, idempotency_key, order_result FROM audit WHERE order_result LIKE '%pending%'").fetchall()
+        n = 0
+        for row_id, key, raw in rows:
+            res = json.loads(raw)
+            if res.get("status") != "pending":
+                continue
+            try:
+                new = self.broker.order_status(key)
+            except BrokerError as e:
+                log.warning("order status lookup failed", extra={"data": {"key": key, "error": str(e)}})
+                continue
+            if new and new["status"] != "pending":
+                res.update(new, checked_at=datetime.now(timezone.utc).isoformat())
+                with connect(self.db) as con:
+                    con.execute("UPDATE audit SET order_result=? WHERE id=?", (json.dumps(res, default=str), row_id))
+                n += 1
+        return n
+
     def execute(self, intent: OrderIntent, decision: dict, day_start_equity: float, high_water_mark: float,
                 consecutive_losses: int, pip_size: float, events: list[EventWindow] | None = None) -> dict:
         try:

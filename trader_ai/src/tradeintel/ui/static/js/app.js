@@ -2,6 +2,7 @@
 import { h, api, fmt, icon, badge, confirmDialog, toast, store, errorState } from './lib.js';
 import * as pages from './pages.js';
 import { createCompanion } from './companion.js';
+import { createActivity, stepLine } from './activity.js';
 
 // [group, [[route id, name, one-line intro]]]; route ids stay stable so links keep working
 const NAV = [
@@ -86,8 +87,15 @@ async function act(name, args = {}, { skipConfirm = false, button = null } = {})
     restore = () => { button.disabled = false; button.replaceChildren(...old); };
   }
   companion?.setActivity('working');
+  const busyLine = (t) => h('span', { class: 'row', style: { gap: '10px', flexWrap: 'nowrap' } }, h('span', { class: 'spin' }), t);
   try {
-    const r = await api.post(`/api/actions/${name}`, args);
+    let r = await api.post(`/api/actions/${name}`, args);
+    if (r.job) {  // long actions run as backend jobs: follow the real job until it ends
+      if (!r.started) note.set(busyLine(`Already running (started ${fmt.ago(r.job.started_at)}), so not starting it twice. Following that one.`));
+      activity.refresh();
+      const j = await activity.track(r.job.id, (jj) => note.set(busyLine(jj ? `${jj.label}: ${stepLine(jj)} · ${Math.round(jj.elapsed_s)} s` : 'Lost contact with the app. Retrying…')));
+      r = j.state === 'succeeded' ? (j.result || { ok: true }) : { ok: false, error: j.error || 'it stopped' };
+    }
     if (r.ok === false) note.update(`Didn't work: ${r.error}`, 'neg');
     else note.update(spec.done(r), 'pos');
     await refreshState();
@@ -125,6 +133,17 @@ const envEl = h('span', { class: 'env-chip' }, 'Connecting…');
 const clockEl = h('span', { class: 'clock' });
 const statusBtn = h('button', { class: 'status-btn', onclick: () => toggleAlerts(), 'aria-label': 'System status and alerts' }, h('span', { class: 'dot' }), h('span', { class: 'label' }, 'Checking…'));
 const content = h('main', { class: 'content', id: 'content', tabindex: '-1' });
+// Live activity from the backend. Buttons tagged data-job are disabled while that kind of job runs anywhere.
+const activity = createActivity({
+  onChange(data) {
+    for (const b of document.querySelectorAll('[data-job]')) {
+      const busy = activity.isRunning(b.dataset.job);
+      if (busy) { b.disabled = true; b.title = 'Already running: see the activity bar'; } else if (b.title.startsWith('Already running')) { b.disabled = false; b.title = ''; }
+    }
+    companion?.setActivity(data?.running.length ? 'working' : null);
+    app.page?.onActivity?.(data);
+  },
+});
 let companion = null;
 let dropEl = null;
 
@@ -146,6 +165,7 @@ function buildShell() {
       h('header', { class: 'topbar' }, titleEl, envEl, clockEl, h('div', { class: 'spacer' }), statusBtn,
         h('button', { class: 'btn sm', onclick: openPalette, title: 'Search and commands (Ctrl+K)', 'aria-label': 'Search and commands' }, icon('search'), h('span', { class: 'hide-md' }, 'Search'), h('kbd', { class: 'hide-md' }, 'Ctrl K')),
         h('button', { class: 'btn icon ghost', onclick: () => companion.toggle(), title: 'Ask the assistant (Ctrl+.)', 'aria-label': 'Ask the assistant' }, h('span', { class: 'brand-mark' }))),
+      h('div', { class: 'actwrap' }, activity.el, activity.drop),
       content));
   document.getElementById('app').replaceChildren(shell);
   app.toggleNav = toggleNav;

@@ -176,6 +176,7 @@ def state(s: Settings, cache: BrokerCache) -> dict:
             "prev_close": _num(bars["close"].iloc[-2]) if len(bars) > 1 else None}
     br = cache.get()
     last = decision_rows(s, 1)
+    act = activity(s)
     ks = kill_switch(s)
     return {"server_time": now.isoformat(), "code_version": code_version(),
             "mode": {"execution_enabled": s.execution.enabled, "broker": s.execution.broker,
@@ -183,12 +184,11 @@ def state(s: Settings, cache: BrokerCache) -> dict:
                      "label": "Paper orders enabled (promoted strategies only)" if s.execution.enabled else "Observation only"},
             "market": {"instrument": s.market.instrument, "asset_class": s.market.asset_class, "timeframe": s.market.timeframe},
             "strategy": {"name": s.live.strategy, "params": s.live.params},
-            "kill_switch": ks, "data": data, "broker": br, "llm": s.llm.provider,
+            "kill_switch": ks, "data": data, "broker": br, "llm": s.llm.provider, "activity": act,
             "account_state": {"day": _kv(s, "day"), "day_start_equity": _kv(s, "day_start_equity"), "hwm": _kv(s, "hwm")},
-            "agent": {"state": "halted" if ks["engaged"] else "idle",
+            "agent": {"state": "working" if any(j["kind"] == "check" for j in act["running"]) else "halted" if ks["engaged"] else "idle",
                       "last_decision": last[0] if last else None,
-                      "note": "Decision cycles run only via `tradeintel run-once` or `tradeintel service`. "
-                              "No scheduler heartbeat is recorded yet, so a running service can't be detected."},
+                      "note": "A check runs when you press Run a new check, or on a schedule while `tradeintel service` runs."},
             "alerts": alerts(s, br, data, ks)}
 
 
@@ -523,6 +523,31 @@ def brain_view(s: Settings, history: int = 120) -> dict:
                     "stored daily bar; they change when a new bar is ingested, not tick by tick."}
 
 
+# ---------------------------------------------------------------- activity (what is running, from the shared job table)
+
+def _slim(job: dict) -> dict:
+    """Activity lists don't need a backtest's equity curve."""
+    r = job.get("result")
+    if isinstance(r, dict) and ("equity" in r or "benchmark" in r):
+        job = {**job, "result": {k: v for k, v in r.items() if k not in ("equity", "benchmark")}}
+    return job
+
+
+def activity(s: Settings) -> dict:
+    from ..jobs import JobStore
+    js = JobStore(s.paths.db_path)
+    hb = _kv(s, "service_heartbeat")
+    service = {"alive": False}
+    if hb:
+        due = datetime.fromisoformat(hb["next_at"])
+        service = {**hb, "alive": _now() < due + timedelta(minutes=2), "overdue": _now() > due + timedelta(minutes=2)}
+    running = js.running()
+    if running:  # a scheduled check that is running now counts as a live scheduler
+        service["alive"] = service["alive"] or any(j["source"] == "service" for j in running)
+    return {"running": [_slim(j) for j in running], "recent": [_slim(j) for j in js.recent(10)], "service": service,
+            "server_time": _now().isoformat()}
+
+
 # ---------------------------------------------------------------- actions
 
 _heavy = threading.Lock()  # one compute-heavy action at a time
@@ -551,30 +576,35 @@ def act_reset_kill(s: Settings, confirm: str) -> dict:
     return {"ok": True, "kill_switch": kill_switch(s)}
 
 
-def act_run_once(s: Settings) -> dict:
-    from ..service import ensure_calendar, run_cycle
-    ensure_calendar(s)
-    try:
-        return {"ok": True, "result": run_cycle(s)}
-    except RuntimeError as e:
-        return {"ok": False, "error": str(e)}
+def act_run_once(s: Settings, progress=lambda _: None) -> dict:
+    from ..service import check
+    return check(s, progress)
 
 
-def act_ingest(s: Settings) -> dict:
+def act_reconcile(s: Settings, progress=lambda _: None) -> dict:
+    from ..execution.pipeline import ExecutionPipeline
+    from ..service import make_broker
+    progress("Asking the broker about sent orders")
+    return {"ok": True, "updated": ExecutionPipeline(s.paths.db_path, make_broker(s), None, False).reconcile()}
+
+
+def act_ingest(s: Settings, progress=lambda _: None) -> dict:
     from ..cli import ingest
     from ..data.providers import DataUnavailable
+    progress("Downloading and checking prices")
     try:
         return {"ok": True, "result": ingest(s)}
     except (DataUnavailable, ValueError) as e:
         return {"ok": False, "error": str(e)}
 
 
-def act_news_ingest(s: Settings) -> dict:
+def act_news_ingest(s: Settings, progress=lambda _: None) -> dict:
     from ..cli import news_ingest
+    progress("Fetching news feeds and the economic calendar")
     return {"ok": True, "result": news_ingest(s)}
 
 
-def act_backtest(s: Settings, strategy: str, params: dict | None) -> dict:
+def act_backtest(s: Settings, strategy: str, params: dict | None, progress=lambda _: None) -> dict:
     from ..backtest.engine import run_backtest
     from ..backtest.metrics import compute_metrics
     from ..backtest.research import engine_params
@@ -589,9 +619,11 @@ def act_backtest(s: Settings, strategy: str, params: dict | None) -> dict:
     except ValueError as e:
         return {"ok": False, "error": str(e)}
     with _heavy:
+        progress("Running the backtest")
         ep = engine_params(s)
         ep.require_stop = strat.requires_stop
         res = run_backtest(bars, strat.signals(bars), s.costs, ep)
+        progress("Comparing with buy-and-hold")
         bh = run_backtest(bars, build("buy_and_hold").signals(bars), s.costs, engine_params(s))
     step = max(1, len(res.equity) // 1500)
     return {"ok": True, "kind": "in-sample backtest", "strategy": strat.describe(), "source": bars.attrs.get("source"),
@@ -601,7 +633,7 @@ def act_backtest(s: Settings, strategy: str, params: dict | None) -> dict:
             "benchmark": [{"time": int(i.timestamp()), "value": _num(v)} for i, v in bh.equity.iloc[::step].items()]}
 
 
-def act_research(s: Settings, strategy: str) -> dict:
+def act_research(s: Settings, strategy: str, progress=lambda _: None) -> dict:
     from ..backtest.research import research
     from ..reporting.html import research_report
 
@@ -613,7 +645,9 @@ def act_research(s: Settings, strategy: str) -> dict:
     if not _heavy.acquire(blocking=False):
         return {"ok": False, "error": "another backtest or research run is in progress"}
     try:
+        progress("Testing on 20 years of history")
         rep = research(s, bars, strategy, registry=Registry(s.paths.db_path))
+        progress("Writing the report")
         research_report(rep, s.paths.reports_dir / f"research_{strategy}.html")
     finally:
         _heavy.release()

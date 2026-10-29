@@ -215,6 +215,10 @@ def alerts(s: Settings, br: dict, data: dict, ks: dict) -> list[dict]:
     elif data["stale"]:
         add("warn", f"stale:{data['last_bar']}", "Price data is out of date",
             f"The latest {data['instrument']} bar is from {data['last_bar'] or 'never'}. Use “Refresh price data” on the Chart page.")
+    from ..service import calendar_fresh
+    if not calendar_fresh(NewsStore(s.paths.db_path), _now()):
+        add("warn", f"calendar:{_now().date()}", "This week's economic calendar is missing: new entries are blocked",
+            "Press “Refresh news & calendar”. Checks also refresh it automatically.")
     for h in NewsStore(s.paths.db_path).health():
         if not h["ok"]:
             add("warn", f"feed:{h['source']}:{h['at']}", f"The {h['source']} news feed failed", h["error"] or "", h["at"])
@@ -392,7 +396,7 @@ def risk_view(s: Settings, cache: BrokerCache) -> dict:
          "value": 0.0 if br.get("available") and not positions else None,
          "note": "" if not positions else "The broker doesn't report stop prices, so open risk is treated as unlimited."},
         {"limit": "Losing trades in a row", "max": r.max_consecutive_losses, "unit": "count", "value": _kv(s, "consecutive_losses"),
-         "note": "Not counted yet: closed trades aren't fed back to this counter (see PROJECT_PLAN)."},
+         "note": "Each closed trade is judged by the market price when a check notices it closed (approximate until fills are reconciled)."},
     ]
     q = br.get("quote")
     if q:
@@ -531,7 +535,8 @@ def act_kill(s: Settings, reason: str) -> dict:
 
 
 def act_run_once(s: Settings) -> dict:
-    from ..service import run_cycle
+    from ..service import ensure_calendar, run_cycle
+    ensure_calendar(s)
     try:
         return {"ok": True, "result": run_cycle(s)}
     except RuntimeError as e:

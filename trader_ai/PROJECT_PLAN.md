@@ -24,7 +24,7 @@ Legend: ✅ done and tested · 🟡 partial · ⏳ planned · ⛔ blocked
 | 10. Monitoring and improvement | 🟡 | Trading OS UI (`tradeintel ui`): local web dashboard over the real backend, an agent trace inspector, and an in-app companion that answers from records and only proposes actions. Static dashboard, audit trail, experiment registry, model registry. ⏳ Drift and calibration monitoring on live-demo results, alerts (Telegram/e-mail), heartbeat. A Dockerfile exists but is unbuilt and untested |
 
 ## Audit
-The full platform audit of 2026-10-29 is in [audit/AUDIT_2026-10-29.md](audit/AUDIT_2026-10-29.md). Verdict: **not ready for live trading**; six P1 risk-control defects (F-01 to F-06) must be fixed before paper orders are switched on.
+The full platform audit of 2026-10-29 is in [audit/AUDIT_2026-10-29.md](audit/AUDIT_2026-10-29.md). Verdict: **not ready for live trading**. The six P1 risk-control defects (F-01 to F-06) are fixed with regression tests (`tests/test_p1_fixes.py`). Before paper orders: a supervised paper-order lifecycle test; P2 items F-07 to F-12 remain.
 
 ## Known limitations
 - First real-data runs (E6–E8 EURUSD daily, E11 SPY daily): all three baseline strategies rejected on both. No edge after costs on EURUSD, and none beats buy-and-hold on SPY (see EXPERIMENTS.md).
@@ -35,8 +35,7 @@ The full platform audit of 2026-10-29 is in [audit/AUDIT_2026-10-29.md](audit/AU
 - Cross-currency P&L conversion isn't implemented. The account currency must be one side of the pair (fine for EURUSD/USD).
 - Daily bars are too coarse to model announcement-time slippage. The backtest doesn't widen spreads around events.
 - The paper broker opens from flat only (no netting/partial closes) and assumes a USD-quoted pair for unrealized P&L.
-- Consecutive-loss tracking in the live cycle reads a stored counter that the paper broker doesn't yet update.
-- The holdout-before-demo step is documented but not enforced in code.
+- The consecutive-loss counter judges closed trades by the market price at the next cycle, not by actual fills (needs fill reconciliation, audit F-07).
 - Each walk-forward fold starts flat, which slightly understates long-hold strategies (visible in buy-and-hold's trade count).
 - Forex Factory's export only covers the current week. Historical calendar data must come from elsewhere.
 

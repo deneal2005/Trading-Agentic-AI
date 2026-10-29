@@ -112,7 +112,10 @@ def holdout_test(s: Settings, bars: pd.DataFrame, strategy_name: str, params: di
     ep.require_stop = strat.requires_stop
     res = run_backtest(ctx, strat.signals(ctx), s.costs, ep, trade_start=holdout.index[0])
     m = compute_metrics(res, s.market.timeframe)
-    registry.record("holdout", strategy=strategy_name, params=params, instrument=s.market.instrument,
+    # the holdout must confirm the walk-forward: profitable, positive Sharpe, drawdown within the promotion limit
+    passed = m["net_return"] > 0 and m["sharpe"] > 0 and m["max_drawdown"] <= s.promotion.max_oos_drawdown
+    m["verdict"] = "passed" if passed else "failed"
+    registry.record("holdout", strategy=strategy_name, params=strat.params, instrument=s.market.instrument,
                     timeframe=s.market.timeframe, data_source=bars.attrs.get("source", "unknown"), data_hash=h,
-                    config=s.model_dump(mode="json"), n_trials=1, metrics=m)
+                    config=s.model_dump(mode="json"), n_trials=1, metrics=m, verdict=m["verdict"])
     return m

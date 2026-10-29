@@ -68,7 +68,12 @@ for inst in ("SPY", "EURUSD"):
 with __import__("sqlite3").connect(s_real.paths.db_path) as con:
     rows = con.execute("SELECT instrument, last_ts, ingested_at FROM ingestions ORDER BY id").fetchall()
 partial = [r for r in rows if r[1][:10] == r[2][:10]]
-rec("D3", "FAIL" if partial else "PASS", "Ingestion can store today's unfinished daily bar",
+from tradeintel.data.validate import drop_unfinished
+probe = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0}, index=pd.date_range(pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta(days=1), periods=2, freq="D"))
+kept, n_drop = drop_unfinished(probe, "1d", "equity", pd.Timestamp.now(tz="UTC").normalize() + pd.Timedelta(hours=15))
+rec("D3", "PASS" if n_drop == 1 and len(kept) == 1 else "FAIL", "Today's unfinished daily bar is dropped before storage and before decisions",
+    f"mid-session probe: dropped {n_drop} of 2 bars. Earlier ingestions that stored a partial bar (fixed on the next ingest): {partial}")
+rec("D3-history", "INFO", "Ingestion can store today's unfinished daily bar",
     f"ingestions whose last bar is dated the same UTC day it was ingested (possible partial candle): {partial}")
 
 # ---------------- PROMOTION GATE SCOPE
@@ -78,6 +83,7 @@ s = tmp_settings()
 Registry(s.paths.db_path).record("walkforward", strategy="sma_cross", params={"fast": 50, "slow": 200}, instrument="GBPUSD",
                                  timeframe="1h", data_source="yahoo", data_hash="x", config={}, n_trials=1, metrics={}, verdict="promotable")
 s.live.params = {"fast": 10, "slow": 50}
+Registry(s.paths.db_path).record("holdout", strategy="sma_cross", params={"fast": 50, "slow": 200}, instrument="GBPUSD", timeframe="1h", data_source="yahoo", data_hash="x", config={}, n_trials=1, metrics={}, verdict="passed")
 got = strategy_promoted(s, "sma_cross")
 rec("G1", "FAIL" if got else "PASS", "Promotion is scoped to instrument, timeframe and parameters",
     f"a 'promotable' verdict for sma_cross on GBPUSD 1h (fast=50/slow=200) makes live sma_cross on EURUSD 1d (fast=10/slow=50) count as promoted: {got}")
@@ -91,12 +97,13 @@ BarStore(s.paths.db_path).upsert(synth, "EURUSD", "1d", "SYNTHETIC")
 now = synth.index[-1].to_pydatetime() + timedelta(hours=26)
 pb = PaperBroker(s.paths.db_path)
 last = float(synth["close"].iloc[-1]); pb.set_quote(Quote("EURUSD", last, last + 0.0001, now))
+s.live.strategy = "no_trade"  # always flat, so the cycle is a hold
 out = run_cycle(s, broker=pb, now=now)
 st = StateStore(s.paths.db_path)
-rec("R1", "FAIL" if out["decision"] in ("hold", "abstain") and st.get("day_start_equity") is None else "INFO",
+rec("R1", "PASS" if out["decision"] == "hold" and st.get("day_start_equity") is not None and st.get("hwm") is not None else "FAIL",
     "Day-start equity / high-water mark are recorded on every cycle",
     f"cycle decision={out['decision']}; day_start_equity stored={st.get('day_start_equity')}, hwm={st.get('hwm')} "
-    "(only recorded when a cycle gets past hold/abstain, so the daily-loss baseline can be set late in the day)")
+    "(must be recorded on hold cycles too)")
 
 # ---------------- RISK
 from tradeintel.news.store import NewsStore
@@ -106,10 +113,10 @@ T = datetime(2026, 10, 29, 12, 30, tzinfo=timezone.utc)
 a = AccountState(equity=10000, day_start_equity=10000, high_water_mark=10000)
 m = MarketState(1.1000, 1.1001, T - timedelta(seconds=2), T, 0.0001)
 eng = lambda: RiskEngine(s.risk, KillSwitch(Path(tempfile.mkdtemp()) / "K"))  # noqa: E731
-d = eng().evaluate(OrderIntent("EURUSD", 1, 10000, 1.1001, 1.0951, None, "t", "k-b", T), a, m, events=[])
+d = eng().evaluate(OrderIntent("EURUSD", 1, 10000, 1.1001, 1.0951, None, "t", "k-b", T), a, m, events=None)
 n_events = len(NewsStore(s_real.paths.db_path).events())
 rec("K1", "FAIL" if d.approved else "PASS", "Event blackout fails closed when the calendar is missing",
-    f"order at 12:30 UTC (a typical US data release time) approved with an empty event list: {d.approved}; events stored in the real DB right now: {n_events}")
+    f"order with no calendar available approved: {d.approved}; events stored in the real DB right now: {n_events}")
 d2 = eng().evaluate(OrderIntent("EURUSD", 1, 10000, 1.1001, 1.0951, None, "t", "k-s", T), a, MarketState(1.1000, 1.1001, T - timedelta(seconds=90), T, 0.0001))
 rec("K2", "PASS" if not d2.approved and not d2.checks["quote_fresh"] else "FAIL", "Stale quote (90 s) is rejected", f"approved={d2.approved}; reasons={d2.reasons}")
 d3 = eng().evaluate(OrderIntent("EURUSD", 1, 10000, 1.13, 1.12, None, "t", "k-g", T), a, m)
@@ -172,10 +179,10 @@ fake = FakeAlpaca()
 br = AlpacaPaperBroker("k", "s", session=fake, quote_pause=0)
 it = OrderIntent("SPY", 1, 10, 500.02, 490.0, None, "t", "sma|SPY|bar|1", datetime.now(timezone.utc))
 pipe = ExecutionPipeline(s.paths.db_path, br, RiskEngine(s.risk, KillSwitch(s.paths.kill_switch_file)), enabled=True)
-r1 = pipe.execute(it, {}, 100000, 100000, 0, 0.01)
+r1 = pipe.execute(it, {}, 100000, 100000, 0, 0.01, [])  # [] = calendar current, nothing scheduled
 pipe2 = ExecutionPipeline(s.paths.db_path, br, RiskEngine(s.risk, KillSwitch(s.paths.kill_switch_file)), enabled=True)
 pipe2.risk._seen_keys |= pipe2.submitted_keys()  # what run_cycle does after a restart
-r2 = pipe2.execute(it, {}, 100000, 100000, 0, 0.01)
+r2 = pipe2.execute(it, {}, 100000, 100000, 0, 0.01, [])  # [] = calendar current, nothing scheduled
 rec("E2", "PASS" if r1["status"] == "error" and r2["status"] in ("rejected", "rejected_by_risk") and len(fake.accepted) == 1 else "FAIL",
     "Timeout with unknown order status does not create a duplicate order (Alpaca mock)",
     f"1st submit: {r1['status']}; after a restart the pipeline re-sent the same order: {r2['status']} ({r2.get('message', '')}); "
@@ -195,8 +202,12 @@ with single_instance(lp):
 rec("C1", "PASS" if second == "another cycle is running" else "FAIL", "Two decision cycles cannot run at once", f"second acquire: {second}")
 
 # ---------------- holdout before demo not enforced
-src = Path("src/tradeintel/service.py").read_text(encoding="utf-8")
-rec("G2", "FAIL" if "holdout" not in src else "PASS", "Single-use holdout must pass before a strategy may trade",
-    "service.run_cycle checks only strategy_promoted(); no holdout result is consulted" if "holdout" not in src else "holdout referenced")
+s = tmp_settings()
+from tradeintel.strategies.library import build as _b
+_p = _b("sma_cross").params
+Registry(s.paths.db_path).record("walkforward", strategy="sma_cross", params=_p, instrument="EURUSD", timeframe="1d", data_source="yahoo", data_hash="x", config={}, n_trials=1, metrics={"folds": [{"params": _p}]}, verdict="promotable")
+no_holdout = strategy_promoted(s, "sma_cross")
+rec("G2", "FAIL" if no_holdout else "PASS", "Single-use holdout must pass before a strategy may trade",
+    f"fixed-settings walk-forward passed on the same market, no holdout recorded -> approved to trade: {no_holdout}")
 
 json.dump(R, open(sys.argv[1], "w"), indent=1, default=str)

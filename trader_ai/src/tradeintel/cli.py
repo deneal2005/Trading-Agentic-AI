@@ -38,7 +38,7 @@ def ingest(s, provider: str | None = None) -> dict:
     """Fetch, validate and store bars. Raises DataUnavailable or ValueError on failure."""
     from .data.providers import make_provider
     from .data.store import BarStore
-    from .data.validate import validate_bars
+    from .data.validate import drop_unfinished, validate_bars
 
     m = s.market
     prov = make_provider(provider or s.data.provider, s.data.csv_path)
@@ -46,6 +46,12 @@ def ingest(s, provider: str | None = None) -> dict:
     bars, rep = validate_bars(raw, m.timeframe)
     if not rep.ok:
         raise ValueError(f"validation failed: {rep.issues}")
+    bars, unfinished = drop_unfinished(bars, m.timeframe, m.asset_class)
+    if unfinished:
+        rep.dropped["unfinished"] = unfinished
+        rep.rows_out = len(bars)
+    if bars.empty:
+        raise ValueError("no finished bars to store")
     h = BarStore(s.paths.db_path).upsert(bars, m.instrument, m.timeframe, prov.source, rep.issues)
     return {"source": prov.source, "rows": rep.rows_out, "dropped": rep.dropped, "issues": rep.issues, "hash": h,
             "first": str(bars.index[0]), "last": str(bars.index[-1])}
@@ -219,14 +225,17 @@ def cmd_risk(s, a):
         ks.engage(a.reason or "manual")
         _print({"kill_switch": True})
     elif a.risk_cmd == "reset":
-        if input("Type RESET to clear the kill switch after reviewing the cause: ").strip() != "RESET":
+        from .service import StateStore
+        if input("Type RESET to clear the kill switch and the losing-streak pause after reviewing the cause: ").strip() != "RESET":
             sys.exit("not reset")
         ks.reset()
-        _print({"kill_switch": False})
+        StateStore(s.paths.db_path).set("consecutive_losses", 0)
+        _print({"kill_switch": False, "consecutive_losses": 0})
 
 
 def cmd_run_once(s, a):
-    from .service import run_cycle
+    from .service import ensure_calendar, run_cycle
+    ensure_calendar(s)
     _print(run_cycle(s))
 
 

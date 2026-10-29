@@ -24,6 +24,18 @@ class ValidationReport:
         return self.rows_out > 0 and not any(i.startswith("FATAL") for i in self.issues)
 
 
+def drop_unfinished(df: pd.DataFrame, timeframe: str, asset_class: str, now=None) -> tuple[pd.DataFrame, int]:
+    """Drop bars whose period hasn't ended yet. Vendors return today's candle while the session is still running;
+    its 'close' is just the latest price, which backtests (built on finished bars) never see."""
+    now = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz="UTC")
+    if timeframe == "1d" and asset_class == "equity":
+        end = df.index + pd.Timedelta(hours=21)  # US close 16:00 New York = 20:00 or 21:00 UTC; 21:00 is safe in both
+    else:
+        end = df.index + TIMEFRAME_DELTA[timeframe]
+    keep = end <= now
+    return df[keep], int((~keep).sum())
+
+
 def validate_bars(df: pd.DataFrame, timeframe: str = "1d") -> tuple[pd.DataFrame, ValidationReport]:
     """Return a cleaned copy and a report.
 

@@ -27,7 +27,7 @@ def setup(settings, tmp_path):
 
 
 def run(pipe, it):
-    return pipe.execute(it, {"action": "enter_long"}, 10000, 10000, 0, 0.0001)
+    return pipe.execute(it, {"action": "enter_long"}, 10000, 10000, 0, 0.0001, [])
 
 
 def test_dry_run_when_disabled(setup):

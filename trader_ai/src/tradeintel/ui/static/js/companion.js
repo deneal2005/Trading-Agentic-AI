@@ -32,7 +32,7 @@ export function createCompanion({ act, getState, route }) {
       h('button', { class: 'btn icon primary', type: 'submit', 'aria-label': 'Send' }, icon('send'))));
   const el = h('div', null, wrap, panelEl);
 
-  let pos = store.get('cmp.pos', null);
+  let pos = store.get('cmp.anchor', null);  // {r, b}: distance from the right/bottom edges, so the orb keeps its corner on resize
   let pinned = store.get('cmp.pinned', false);
   let busy = null;          // 'thinking' | 'working' | null
   let lastState = null; let lastErr = null;
@@ -45,7 +45,8 @@ export function createCompanion({ act, getState, route }) {
     return { x: Math.min(Math.max(p.x, MARGIN), innerWidth - SIZE - MARGIN), y: Math.min(Math.max(p.y, MARGIN), innerHeight - SIZE - MARGIN) };
   }
   // pos stays null until the user drags, so the default follows the window's bottom-right corner
-  const cur = () => clamp(pos || { x: innerWidth - SIZE - 24, y: innerHeight - SIZE - 24 });
+  const cur = () => clamp(pos ? { x: innerWidth - pos.r, y: innerHeight - pos.b } : { x: innerWidth - SIZE - 24, y: innerHeight - SIZE - 24 });
+  const anchor = (p) => ({ r: innerWidth - p.x, b: innerHeight - p.y });
   function place() {
     const p = cur();
     Object.assign(wrap.style, { left: `${p.x}px`, top: `${p.y}px` });
@@ -67,13 +68,14 @@ export function createCompanion({ act, getState, route }) {
   orb.addEventListener('pointermove', (e) => {
     if (!drag) return;
     const dx = e.clientX - drag.sx; const dy = e.clientY - drag.sy;
-    if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
-    if (drag.moved) { pos = clamp({ x: drag.ox + dx, y: drag.oy + dy }); place(); }
+    if (Math.abs(dx) + Math.abs(dy) > 8) drag.moved = true;
+    if (drag.moved) { pos = anchor(clamp({ x: drag.ox + dx, y: drag.oy + dy })); place(); }
   });
   orb.addEventListener('pointerup', () => {
     if (drag?.moved) { // snap to the nearest side edge
-      pos = clamp({ x: pos.x + SIZE / 2 < innerWidth / 2 ? MARGIN : innerWidth - SIZE - MARGIN, y: pos.y });
-      place(); store.set('cmp.pos', pos);
+      const p = cur();
+      pos = anchor(clamp({ x: p.x + SIZE / 2 < innerWidth / 2 ? MARGIN : innerWidth - SIZE - MARGIN, y: p.y }));
+      place(); store.set('cmp.anchor', pos);
       orb._suppressClick = true;
     }
     drag = null;
@@ -98,11 +100,12 @@ export function createCompanion({ act, getState, route }) {
     wrap.style.display = v ? 'none' : '';
     if (v) panelEl.style.display = 'none';
   }
-  function resetPosition() { pos = null; store.set('cmp.pos', null); place(); }
+  function resetPosition() { pos = null; store.set('cmp.anchor', null); place(); }
 
   // ---------------------------------------------------------- state & notifications
   function update(st, err) {
     lastState = st; lastErr = err;
+    if (!drag) place();  // re-anchor if the window size changed without a resize event
     renderOrb();
     if (!st) return;
     status.textContent = `${st.agent.state} · ${st.mode.label} · ${st.broker.available ? st.broker.environment : 'broker offline'}`;
@@ -172,7 +175,7 @@ export function createCompanion({ act, getState, route }) {
 
   function describeResult(action, r) {
     if (r.ok === false) return `The backend reported a failure: ${r.error}`;
-    if (action === 'kill') return `Kill switch engaged at ${r.kill_switch?.at || 'now'}. ${r.note}`;
+    if (action === 'kill') return `Emergency stop turned on at ${r.kill_switch?.at || 'now'}. ${r.note}`;
     if (action === 'run-once') return `Cycle result: ${JSON.stringify(r.result, null, 1)}`;
     if (action === 'backtest') {
       const x = r.metrics;

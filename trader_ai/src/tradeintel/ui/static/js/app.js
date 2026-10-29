@@ -3,10 +3,26 @@ import { h, api, fmt, icon, badge, confirmDialog, toast, store, errorState } fro
 import * as pages from './pages.js';
 import { createCompanion } from './companion.js';
 
+// [group, [[route id, name, one-line intro]]]; route ids stay stable so links keep working
 const NAV = [
-  ['overview', 'Overview'], ['markets', 'Markets'], ['execution', 'Execution'], ['agents', 'Agents'], ['brain', 'Neural Brain'],
-  ['risk', 'Risk Center'], ['research', 'Research'], ['news', 'News & Events'], ['activity', 'Activity & Logs'], ['settings', 'Settings'],
+  ['Monitor', [
+    ['overview', 'Today', ''],
+    ['markets', 'Chart', 'Price history with the strategy’s signals and the AI’s recorded decisions.'],
+    ['execution', 'Orders & positions', 'What the paper account holds, every order the AI considered, and the emergency stop.'],
+    ['risk', 'Safety', 'The hard limits every order has to pass, and how close the account is to them.'],
+  ]],
+  ['Understand', [
+    ['agents', 'AI decisions', 'How each decision was made, step by step, from what was actually recorded.'],
+    ['brain', 'Neural brain', ''],
+    ['research', 'Strategy lab', 'Every strategy tested on real history, and exactly why it passed or failed.'],
+  ]],
+  ['Records', [
+    ['news', 'News & calendar', 'Economic events that can move the market, and headlines from official sources.'],
+    ['activity', 'History', 'Everything that happened, newest first: decisions, orders and system logs.'],
+  ]],
 ];
+const SETTINGS = ['settings', 'Settings', 'How the system is set up. Changes are made in config files on purpose, not from this screen.'];
+const PAGES = [...NAV.flatMap(([, items]) => items), SETTINGS];
 const POLL_MS = 10000;
 
 const app = { state: null, stateAt: 0, stateError: null, page: null, route: null, listeners: new Set() };
@@ -15,29 +31,29 @@ const app = { state: null, stateAt: 0, stateError: null, page: null, route: null
 const ACTIONS = {
   kill: {
     confirm: () => ({
-      title: 'Engage the kill switch?', danger: true, confirm: 'Engage kill switch',
-      body: h('div', { class: 'stack' }, h('div', null, 'The backend will refuse every new order until the switch is cleared.'),
-        h('div', { class: 'note warn small' }, 'It does NOT close open positions or cancel resting broker orders.'),
-        h('div', { class: 'small muted' }, 'Clearing it later needs `tradeintel risk reset` in a terminal (type RESET).')),
+      title: 'Stop all new orders?', danger: true, confirm: 'Stop new orders',
+      body: h('div', { class: 'stack' }, h('div', null, 'Every new order will be refused until you turn the emergency stop off again.'),
+        h('div', { class: 'note warn small' }, 'It does not sell what you already hold, and it does not cancel orders already waiting at the broker.'),
+        h('div', { class: 'small muted' }, 'To turn it off later, run `tradeintel risk reset` in a terminal and type RESET.')),
     }),
-    done: (r) => 'Kill switch engaged (backend confirmed). ' + (r.note || ''), remount: true,
+    done: () => 'Emergency stop is on. New orders are blocked.', remount: true,
   },
   'run-once': {
     confirm: (st) => ({
-      title: 'Run one decision cycle?', danger: st.mode.execution_enabled, confirm: 'Run cycle',
+      title: 'Run a new check?', danger: st.mode.execution_enabled, confirm: 'Run check',
       body: st.mode.execution_enabled
-        ? h('div', { class: 'note neg' }, 'Order submission is ENABLED: a promoted strategy with a risk-approved signal will send a paper order.')
-        : h('div', null, 'Records a decision with the current data. Order submission is disabled, so no order can be sent (dry run).'),
+        ? h('div', { class: 'note neg' }, 'Paper orders are ON. If a promoted strategy signals and every safety check passes, a paper order will be sent.')
+        : h('div', null, 'The AI looks at the latest prices and records what it would do. Orders are off, so nothing is sent.'),
     }),
-    done: (r) => `Cycle finished (backend): ${r.result?.decision || r.result?.status || 'done'}${r.result?.execution ? ' · ' + r.result.execution.status : ''}`, remount: true,
+    done: (r) => `Check finished: ${({ abstain: 'no trade, the AI held back', hold: 'nothing changed', exit: 'wants to close', enter_long: 'wants to buy', enter_short: 'wants to sell short' })[r.result?.decision] || r.result?.status || 'done'}.`, remount: true,
   },
   research: {
-    confirm: (st, args) => ({ title: `Run walk-forward research on ${args.strategy}?`, confirm: 'Run research',
-      body: h('div', null, 'This takes a few seconds, adds trials to the experiment registry (they count against the strategy) and overwrites its HTML report.') }),
-    done: (r) => `Research recorded as experiment #${r.experiment_id}: ${r.gate.passed ? 'passed' : 'rejected'}.`,
+    confirm: (st, args) => ({ title: `Test ${args.strategy} on history?`, confirm: 'Run test',
+      body: h('div', null, 'This takes a few seconds. The result is recorded in the Strategy lab, and the run counts as an extra attempt for this strategy.') }),
+    done: (r) => `Test recorded as experiment #${r.experiment_id}: ${r.gate.passed ? 'passed' : 'failed'} the safety gate.`,
   },
-  backtest: { done: () => 'In-sample backtest finished (inspection only).' },
-  ingest: { done: (r) => `Stored ${r.result.rows} ${r.result.source} bars, last ${fmt.date(r.result.last)}.`, remount: true },
+  backtest: { done: () => 'Quick backtest finished. It is for a first look only, not proof.' },
+  ingest: { done: (r) => `Price data refreshed: ${r.result.rows} daily bars, latest ${fmt.date(r.result.last)}.`, remount: true },
   'news-ingest': { done: () => 'News and calendar refreshed.' },
 };
 
@@ -80,86 +96,76 @@ async function refreshState() {
 const shell = h('div', { class: `shell ${store.get('nav.collapsed', false) ? 'collapsed' : ''}` });
 const navEl = h('nav', { class: 'nav', 'aria-label': 'Main' });
 const titleEl = h('h1');
-const pillsEl = h('div', { class: 'pills', role: 'status', 'aria-live': 'polite' });
-const bellCount = h('span', { class: 'badge warn', style: { display: 'none' } });
+const envEl = h('span', { class: 'env-chip' }, 'Connecting…');
+const clockEl = h('span', { class: 'clock' });
+const statusBtn = h('button', { class: 'status-btn', onclick: () => toggleAlerts(), 'aria-label': 'System status and alerts' }, h('span', { class: 'dot' }), h('span', { class: 'label' }, 'Checking…'));
 const content = h('main', { class: 'content', id: 'content', tabindex: '-1' });
 let companion = null;
 let dropEl = null;
 
 function buildShell() {
-  for (const [id, label] of NAV) {
-    navEl.append(h('a', { href: `#/${id}`, dataset: { id }, title: label }, icon(id), h('span', null, label)));
+  for (const [group, items] of NAV) {
+    navEl.append(h('div', { class: 'nav-group' }, group));
+    for (const [id, label] of items) navEl.append(h('a', { href: `#/${id}`, dataset: { id }, title: label }, icon(id), h('span', null, label)));
   }
   const toggleNav = () => { shell.classList.toggle('collapsed'); store.set('nav.collapsed', shell.classList.contains('collapsed')); };
   shell.append(
     h('aside', { class: 'sidebar' },
-      h('div', { class: 'brand' }, h('span', { class: 'brand-mark', 'aria-hidden': 'true' }), h('span', { class: 'brand-name' }, 'Trading OS', h('small', null, 'tradeintel'))),
+      h('div', { class: 'brand' }, h('span', { class: 'brand-mark', 'aria-hidden': 'true' }), h('span', { class: 'brand-name' }, 'Trading OS')),
       navEl,
-      h('div', { class: 'side-foot' }, h('button', { class: 'btn icon ghost', title: 'Collapse sidebar (Ctrl+B)', 'aria-label': 'Collapse sidebar', onclick: toggleNav }, icon('menu')),
-        h('span', { class: 'small dim' }, 'local · demo only'))),
+      h('div', { class: 'nav', style: { flex: 'none', paddingTop: 0 } },
+        h('a', { href: '#/settings', dataset: { id: 'settings' }, title: 'Settings' }, icon('settings'), h('span', null, 'Settings'))),
+      h('div', { class: 'side-foot' }, h('button', { class: 'btn icon ghost sm', title: 'Collapse sidebar (Ctrl+B)', 'aria-label': 'Collapse sidebar', onclick: toggleNav }, icon('menu')),
+        h('span', { class: 'small dim' }, 'Runs on this PC · paper only'))),
     h('div', { class: 'main' },
-      h('header', { class: 'topbar' }, titleEl, pillsEl, h('div', { class: 'spacer' }),
-        h('button', { class: 'btn sm', onclick: openPalette, title: 'Search & commands', 'aria-label': 'Open command palette' }, icon('search'), h('span', null, 'Search'), h('kbd', null, 'Ctrl K')),
-        h('button', { class: 'btn icon ghost', onclick: toggleAlerts, title: 'Alerts', 'aria-label': 'Alerts' }, icon('bell'), bellCount),
-        h('button', { class: 'btn icon ghost', onclick: () => companion.toggle(), title: 'Companion (Ctrl+.)', 'aria-label': 'Toggle companion' }, h('span', { class: 'brand-mark' }))),
+      h('header', { class: 'topbar' }, titleEl, envEl, clockEl, h('div', { class: 'spacer' }), statusBtn,
+        h('button', { class: 'btn sm', onclick: openPalette, title: 'Search and commands (Ctrl+K)', 'aria-label': 'Search and commands' }, icon('search'), h('span', null, 'Search'), h('kbd', null, 'Ctrl K')),
+        h('button', { class: 'btn icon ghost', onclick: () => companion.toggle(), title: 'Ask the assistant (Ctrl+.)', 'aria-label': 'Ask the assistant' }, h('span', { class: 'brand-mark' }))),
       content));
   document.getElementById('app').replaceChildren(shell);
   app.toggleNav = toggleNav;
 }
 
-function pill(text, tone = '', title = '') {
-  return h('span', { class: `pill ${tone}`, title }, h('span', { class: 'dot' }), text);
-}
-
 function renderTopbar() {
   const st = app.state;
-  const kids = [];
-  if (app.stateError) kids.push(pill('BACKEND DISCONNECTED', 'bad', app.stateError.message));
-  if (st) {
+  if (app.stateError) {
+    envEl.className = 'env-chip bad';
+    envEl.textContent = 'App backend offline';
+  } else if (st) {
     const b = st.broker;
-    kids.push(b.available
-      ? h('span', { class: 'pill env', title: `account ${b.account}` }, b.environment === 'paper' ? 'INTERNAL PAPER' : `PAPER · ${b.broker.toUpperCase()}`)
-      : pill('BROKER DISCONNECTED', 'bad', b.error));
-    kids.push(pill(st.mode.execution_enabled ? 'PAPER ORDERS ON' : 'OBSERVATION ONLY', st.mode.execution_enabled ? 'warnp' : 'ok', st.mode.label));
-    if (b.clock) {
-      const open = b.clock.is_open;
-      kids.push(pill(open ? `US market open · closes ${fmt.time(b.clock.next_close)}` : `US market closed · opens ${fmt.time(b.clock.next_open)}`, open ? 'ok' : '', 'Alpaca market clock'));
-    }
-    kids.push(pill(`${st.data.instrument} bar ${fmt.date(st.data.last_bar)}${st.data.stale ? ' · stale' : ''}`, st.data.stale ? 'warnp' : 'ok', `source ${st.data.source || 'none'}`));
-    kids.push(pill(`agent ${st.agent.state}${st.agent.last_decision ? ' · ' + fmt.ago(st.agent.last_decision.decided_at) : ''}`, st.agent.state === 'halted' ? 'bad' : 'aip', st.agent.note));
-    kids.push(pill(st.kill_switch.engaged ? 'KILL SWITCH ENGAGED' : 'kill switch clear', st.kill_switch.engaged ? 'bad' : 'ok', st.kill_switch.reason || ''));
-    kids.push(h('span', { class: 'pill', title: 'last state update' }, `updated ${fmt.ago(new Date(app.stateAt).toISOString())}`));
+    envEl.className = `env-chip ${b.available ? '' : 'bad'}`;
+    envEl.textContent = !b.available ? 'Broker not connected' : b.environment === 'paper' ? 'Internal paper account' : `Paper account · ${b.broker[0].toUpperCase()}${b.broker.slice(1)}`;
+    envEl.title = b.available ? `Account ${b.account}. Live trading is disabled in this build.` : b.error;
+    const c = b.clock;
+    const next = c && (c.is_open ? c.next_close : c.next_open);
+    clockEl.title = next ? `${c.is_open ? 'Closes' : 'Opens'} ${fmt.time(next)} your time` : '';
+    clockEl.replaceChildren(...(c ? [h('b', null, c.is_open ? 'US market open' : 'US market closed'), ` · ${c.is_open ? 'closes' : 'opens'} ${fmt.ago(next)}`] : []));
   }
-  pillsEl.replaceChildren(...kids);
-  const unseen = unseenAlerts();
-  bellCount.style.display = unseen.length ? '' : 'none';
-  bellCount.textContent = String(unseen.length);
+  const issues = app.stateError ? [{ level: 'danger' }] : (st?.alerts || []).filter((a) => a.level !== 'info');
+  const bad = issues.some((a) => a.level === 'danger');
+  statusBtn.className = `status-btn ${bad ? 'bad' : issues.length ? 'warn' : ''}`;
+  statusBtn.querySelector('.label').textContent = app.stateError ? 'Offline' : issues.length ? `${issues.length} need${issues.length === 1 ? 's' : ''} attention` : 'All clear';
 }
 
 function renderNavBadges() {
   const st = app.state;
   if (!st) return;
-  for (const a of navEl.querySelectorAll('a')) {
+  for (const a of shell.querySelectorAll('.nav a')) {
     a.querySelector('.badge')?.remove();
-    if (a.dataset.id === 'risk' && st.kill_switch.engaged) a.append(badge('halt', 'neg'));
-    if (a.dataset.id === 'execution' && !st.broker.available) a.append(badge('off', 'neg'));
+    if (a.dataset.id === 'risk' && st.kill_switch.engaged) a.append(badge('stopped', 'neg'));
+    if (a.dataset.id === 'execution' && !st.broker.available) a.append(badge('offline', 'neg'));
   }
 }
 
 // ------------------------------------------------------------ alerts center
-function unseenAlerts() {
-  const seen = new Set(store.get('alerts.seen', []));
-  return (app.state?.alerts || []).filter((a) => !seen.has(a.key));
-}
 function toggleAlerts() {
   if (dropEl) { dropEl.remove(); dropEl = null; return; }
   const al = app.state?.alerts || [];
-  store.set('alerts.seen', [...new Set([...store.get('alerts.seen', []), ...al.map((a) => a.key)])].slice(-300));
   dropEl = h('div', { class: 'drop', role: 'dialog', 'aria-label': 'Alerts' },
-    h('div', { class: 'panel-h' }, h('h2', null, 'Alerts'), h('span', { class: 'meta' }, 'derived from live state')),
+    h('div', { class: 'panel-h', style: { paddingBottom: '10px' } }, h('h2', null, 'Needs your attention'), h('span', { class: 'meta' }, 'checked every 10 seconds')),
     al.length ? al.map((a) => h('div', { class: `alert-item ${a.level}` }, h('div', { class: 'bar' }),
-      h('div', null, h('div', null, a.title), a.detail ? h('div', { class: 'small muted' }, a.detail) : null, a.at ? h('div', { class: 'small dim' }, fmt.ago(a.at)) : null)))
-      : h('div', { class: 'state' }, h('div', { class: 't' }, 'No active alerts')));
+      h('div', null, h('div', { style: { fontWeight: 500 } }, a.title), a.detail ? h('div', { class: 'small muted' }, a.detail) : null, a.at ? h('div', { class: 'small dim' }, fmt.ago(a.at)) : null)))
+      : h('div', { class: 'state' }, h('div', { class: 't' }, 'All clear'), h('div', { class: 'small' }, 'Nothing needs your attention.')));
   document.body.append(dropEl);
   renderTopbar();
   setTimeout(() => document.addEventListener('click', function close(e) {
@@ -170,20 +176,21 @@ function toggleAlerts() {
 // ------------------------------------------------------------ routing
 function parseRoute() {
   const [path, qs] = (location.hash.replace(/^#\/?/, '') || 'overview').split('?');
-  return { id: NAV.some(([n]) => n === path) ? path : 'overview', params: Object.fromEntries(new URLSearchParams(qs || '')) };
+  return { id: PAGES.some(([n]) => n === path) ? path : 'overview', params: Object.fromEntries(new URLSearchParams(qs || '')) };
 }
 
 function mount() {
   app.route = parseRoute();
   app.page?.destroy?.();
-  for (const a of navEl.querySelectorAll('a')) a.classList.toggle('active', a.dataset.id === app.route.id);
-  titleEl.textContent = NAV.find(([n]) => n === app.route.id)[1];
-  document.title = `${titleEl.textContent} · Trading OS`;
+  for (const a of shell.querySelectorAll('.nav a')) a.classList.toggle('active', a.dataset.id === app.route.id);
+  const [, name, intro] = PAGES.find(([n]) => n === app.route.id);
+  titleEl.textContent = name;
+  document.title = `${name} · Trading OS`;
   if (!app.state) { content.replaceChildren(errorState(app.stateError || 'no state', () => refreshState().then(mount))); return; }
   try {
     // ctx.state is a getter so pages always read the latest polled state
     app.page = pages[app.route.id]({ get state() { return app.state; }, params: app.route.params, act, companion, go: (hash) => { location.hash = hash; } });
-    content.replaceChildren(app.page.el);
+    content.replaceChildren(...(intro ? [h('p', { class: 'page-intro' }, intro)] : []), app.page.el);
   } catch (e) {
     console.error(e);
     content.replaceChildren(errorState(e));
@@ -235,13 +242,13 @@ async function openPalette() {
 
 function baseItems() {
   return [
-    ...NAV.map(([id, label]) => ({ label: `Go to ${label}`, group: 'page', run: () => { location.hash = `#/${id}`; } })),
-    { label: 'Refresh market data', group: 'action', kw: 'ingest bars', run: () => act('ingest') },
+    ...PAGES.map(([id, label]) => ({ label: `Go to ${label}`, group: 'page', run: () => { location.hash = `#/${id}`; } })),
+    { label: 'Run a new check', group: 'action', kw: 'run-once agent decision cycle', run: () => act('run-once') },
+    { label: 'Refresh price data', group: 'action', kw: 'ingest bars market data', run: () => act('ingest') },
     { label: 'Refresh news & calendar', group: 'action', kw: 'ingest events', run: () => act('news-ingest') },
-    { label: 'Run decision cycle', group: 'action', kw: 'run-once agent', run: () => act('run-once') },
-    { label: 'Engage kill switch', group: 'action', kw: 'stop halt pause', run: () => act('kill') },
-    { label: 'Refresh broker snapshot', group: 'action', kw: 'alpaca account', run: () => api.post('/api/actions/refresh-broker').then(refreshState) },
-    { label: 'Open companion', group: 'companion', run: () => companion.open() },
+    { label: 'Stop all new orders (emergency stop)', group: 'action', kw: 'kill switch halt pause', run: () => act('kill') },
+    { label: 'Reload account from the broker', group: 'action', kw: 'alpaca account refresh', run: () => api.post('/api/actions/refresh-broker').then(refreshState) },
+    { label: 'Ask the assistant', group: 'assistant', kw: 'companion', run: () => companion.open() },
     { label: 'Toggle sidebar', group: 'view', run: () => app.toggleNav() },
   ];
 }

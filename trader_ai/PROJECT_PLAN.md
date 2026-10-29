@@ -24,7 +24,7 @@ Legend: ✅ done and tested · 🟡 partial · ⏳ planned · ⛔ blocked
 | 10. Monitoring and improvement | 🟡 | Static dashboard, audit trail, experiment registry, model registry. ⏳ Drift and calibration monitoring on live-demo results, alerts (Telegram/e-mail), heartbeat. A Dockerfile exists but is unbuilt and untested |
 
 ## Known limitations
-- No result on real data yet (see EXPERIMENTS.md).
+- First real-data runs (E6–E8, EURUSD daily): all three baseline strategies rejected, with no edge after costs (see EXPERIMENTS.md).
 - Cross-currency P&L conversion isn't implemented. The account currency must be one side of the pair (fine for EURUSD/USD).
 - Daily bars are too coarse to model announcement-time slippage. The backtest doesn't widen spreads around events.
 - The paper broker opens from flat only (no netting/partial closes) and assumes a USD-quoted pair for unrealized P&L.
@@ -34,7 +34,7 @@ Legend: ✅ done and tested · 🟡 partial · ⏳ planned · ⛔ blocked
 - Forex Factory's export only covers the current week. Historical calendar data must come from elsewhere.
 
 ## Next concrete tasks
-1. **Run locally with internet:** `tradeintel data ingest`, `news ingest`, then `research` on real EURUSD. Record the results in EXPERIMENTS.md.
+1. ✅ Real EURUSD research run (E6–E8). Next: the Stooq cross-check (E9) and `news ingest` on the live feeds.
 2. Build a historical event calendar (official BLS/Fed/ECB/Eurostat release schedules) and run the news ablation on real data.
 3. Wire the consecutive-loss counter and P&L tracking from closed trades into the service state.
 4. Add deflated Sharpe and parameter-neighbourhood robustness to the promotion gate.

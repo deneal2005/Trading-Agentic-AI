@@ -43,6 +43,7 @@
 | LLM role | Interpretation and explanation only | Fine-tuning is not justified until a measurable task and labelled dataset exist (see PROJECT_PLAN) |
 | Quant model | Regularised logistic regression vs naive baselines | Simple, fast and honest. More complex models must beat it first |
 | Multi-agent | Single-pass deterministic agents, abstain on objections | Avoids endless debates and invented consensus. Compared against the single-strategy baseline (`mode="single"`) |
+| UI | Local web app (`ui/`): stdlib HTTP server plus build-free ES modules, TradingView Lightweight Charts vendored | No new runtime dependency or Node toolchain. Binds to 127.0.0.1, uses a per-launch token for actions, and calls the same backend code as the CLI, so it can't bypass the risk engine or config |
 | Demo broker | Alpaca paper (equities), OANDA v20 practice (FX) | Free demo accounts with REST APIs. Neither client class can reach a live host: the base URLs are fixed, and the account type is verified |
 
 ## Leakage controls

@@ -85,6 +85,12 @@ def make_broker(s: Settings, name: str | None = None) -> Broker:
     return PaperBroker(s.paths.db_path, s.backtest.initial_equity, s.market.account_currency)
 
 
+def max_bar_age(s: Settings) -> timedelta:
+    """Age beyond which the latest bar counts as stale (weekends allowed for daily bars)."""
+    tf = s.market.timeframe
+    return TIMEFRAME_DELTA[tf] * (s.data.max_staleness_bars + 1) + (timedelta(days=2) if tf == "1d" else timedelta(0))
+
+
 def strategy_promoted(s: Settings, name: str) -> bool:
     return any(e["strategy"] == name and e["verdict"] == "promotable" and e["data_source"] != "SYNTHETIC"
                for e in Registry(s.paths.db_path).list(500, kind="walkforward"))
@@ -109,8 +115,7 @@ def run_cycle(s: Settings, broker: Broker | None = None, now: datetime | None = 
         except BrokerError as e:
             return {"status": "abstain", "reason": f"broker unavailable: {e}"}
         cur = (1 if pos[0].units > 0 else -1) if pos else 0
-        max_age = TIMEFRAME_DELTA[m.timeframe] * (s.data.max_staleness_bars + 1) + (timedelta(days=2) if m.timeframe == "1d" else timedelta(0))
-        ctx = DecisionContext(m.instrument, bars, sig, strat.name, now, max_age, cur, events,
+        ctx = DecisionContext(m.instrument, bars, sig, strat.name, now, max_bar_age(s), cur, events,
                               regime=str(regime_labels(bars).iloc[-1]))
         d = coordinate(ctx, "multi")
         DecisionLog(s.paths.db_path).record(ctx, d)

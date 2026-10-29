@@ -350,6 +350,11 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .toasts { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .toast { background: var(--surface-3); border: 1px solid var(--border-2); border-radius: 10px; padding: 10px 14px; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); max-width: 560px; }
 .toast.neg { border-color: rgba(255, 107, 107, .55); }
+.toast.busy { border-color: rgba(155, 140, 255, .55); }
+.toast.pos, .toast.neg, .toast.busy { font-size: 14px; padding: 12px 16px; font-weight: 500; }
+.spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .25); border-top-color: currentColor; animation: spin .8s linear infinite; flex: none; display: inline-block; }
+.hero.fresh { animation: fresh 2.4s ease-out; }
+@keyframes fresh { 0% { box-shadow: 0 0 0 2px rgba(155, 140, 255, .9), 0 0 40px rgba(155, 140, 255, .35); } 100% { box-shadow: 0 0 0 0 transparent; } }
 .toast.pos { border-color: rgba(61, 220, 151, .55); }
 
 /* ------------------------------------------------------------ companion */

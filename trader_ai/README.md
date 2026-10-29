@@ -99,7 +99,7 @@ This opens `http://127.0.0.1:8765` in your browser. Stop it with Ctrl+C in the t
 
 **Companion:** the orb in the corner (drag, pin, hide; Ctrl+. opens it). It answers from records ("explain current positions", "why is the agent waiting?", "summarize today", "why was that trade rejected?"). Answers are labelled *from records*, *LLM-generated* (only if `llm.provider` is set) or *backend result*. For anything that changes state (kill switch, decision cycle, research, data refresh) it only **proposes**; the action runs after you confirm, and it reports what the backend returned. It lives inside the browser tab; it doesn't float over other Windows apps.
 
-**Safety:** the server listens on 127.0.0.1 only and checks the Host header. Actions need a per-launch token and the same origin. There is no endpoint that enables execution, edits risk limits, clears the kill switch, cancels orders or closes positions. The risk engine and `execution.enabled` decide everything, exactly as from the CLI. Command palette: Ctrl+K.
+**Safety:** the server listens on 127.0.0.1 only and checks the Host header. Actions need a per-launch token and the same origin. There is no endpoint that enables execution, edits risk limits, cancels orders or closes positions. Turning the emergency stop off needs the typed word RESET (as in the terminal) and is written to the audit log. The risk engine and `execution.enabled` decide everything, exactly as from the CLI. Command palette: Ctrl+K.
 
 ## Layout
 

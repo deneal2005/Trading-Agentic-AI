@@ -1,6 +1,15 @@
 // Screens. Each page is (ctx) => { el, destroy? }. Every number shown comes from
 // the backend; anything unavailable is labelled as such.
-import { h, s, api, fmt, when, panel, flush, badge, table, kv, stat, meter, loadInto, emptyState, errorState, pre, icon, store } from './lib.js';
+import { h, s, api, fmt, when, panel, flush, badge, table, kv, stat, meter, loadInto, loading, emptyState, errorState, pre, icon, store } from './lib.js';
+
+const killReason = (r) => (r || 'no reason recorded').replace(/^ui: engaged from UI$/, 'turned on from this app').replace(/^ui: /, '');
+
+// One control for the emergency stop: turns it on, or, when it's on, turns it off again (you type RESET).
+function killButton(ctx, engaged) {
+  return engaged
+    ? h('button', { class: 'btn', onclick: (e) => ctx.act('reset-kill', { confirm: 'RESET' }, { button: e.currentTarget }) }, 'Turn off emergency stop…')
+    : h('button', { class: 'btn danger', onclick: (e) => ctx.act('kill', {}, { button: e.currentTarget }) }, icon('bolt'), 'Stop all new orders');
+}
 
 export { brain } from './brain.js';
 
@@ -115,7 +124,7 @@ function plainObjection(o) {
 function story(st, d) {
   const sym = st.market.instrument;
   const rule = STRAT_NAMES[st.strategy.name] || st.strategy.name;
-  if (st.kill_switch.engaged) return { h: ['Trading is stopped. ', h('span', { class: 'ai' }, 'The emergency stop is on.')], why: `Reason recorded: ${st.kill_switch.reason}. New orders are refused until it is reset in a terminal.` };
+  if (st.kill_switch.engaged) return { h: ['Trading is stopped. ', h('span', { class: 'ai' }, 'The emergency stop is on.')], why: `Reason: ${killReason(st.kill_switch.reason)}${st.kill_switch.at ? ` (${fmt.time(st.kill_switch.at)})` : ''}. New orders are refused until you turn it off with the button below.` };
   if (!d) return { h: [`Watching ${sym}. `, h('span', { class: 'ai' }, 'No check has run yet.')], why: 'Run a check to see what the strategy and the AI agents make of the latest prices.' };
   const market = (d.reports || []).find((r) => r.agent === 'market');
   const side = market?.stance === 'long' ? 'buy' : market?.stance === 'short' ? 'sell' : 'stay out';
@@ -182,6 +191,10 @@ export function overview(ctx) {
 
   function renderHero(st) {
     const d = lastDecision;
+    if (d === undefined) {  // first fetch still running: don't flash an empty rail
+      hero.replaceChildren(h('div', { class: 'eyebrow' }, `${st.market.instrument} · daily`), h('h2', null, 'Loading the latest check…'), loading(2));
+      return;
+    }
     const s = story(st, d);
     const b = st.broker;
     hero.replaceChildren(
@@ -193,7 +206,8 @@ export function overview(ctx) {
       h('p', { class: 'why' }, s.why),
       rail(st, d),
       h('div', { class: 'actions' },
-        h('button', { class: 'btn primary', onclick: () => ctx.act('run-once') }, icon('bolt'), 'Run a new check'),
+        h('button', { class: 'btn primary', onclick: (e) => ctx.act('run-once', {}, { button: e.currentTarget }) }, icon('bolt'), 'Run a new check'),
+        st.kill_switch.engaged ? killButton(ctx, true) : null,
         d ? h('a', { class: 'btn ghost', href: `#/agents?decision=${d.id}` }, 'See how it decided') : null,
         h('span', { class: 'small muted' }, 'Checks run when you press this, or on a schedule while `tradeintel service` is running.')));
   }
@@ -242,6 +256,12 @@ export function overview(ctx) {
     renderHero(st); renderAccount(st);
     Promise.all([api.get('/api/decisions?limit=6'), api.get('/api/audit?limit=6'), api.get('/api/risk'), api.get('/api/news')]).then(([ds, au, r, n]) => {
       lastDecision = ds[0] || null;
+      if (lastDecision && store.get('ov.seen') !== lastDecision.id) {  // a check you haven't seen yet: make it visible
+        store.set('ov.seen', lastDecision.id);
+        hero.classList.remove('fresh');
+        void hero.offsetWidth;  // restart the highlight animation
+        hero.classList.add('fresh');
+      }
       renderHero(ctx.state);
       renderRecent(ds, au);
       safety.replaceChildren(riskSummary(r));
@@ -389,10 +409,10 @@ export function execution(ctx) {
           { label: 'Stop', key: 'stop_price', num: true }, { label: 'Status', render: (o) => badge(o.status) }, { label: 'Submitted', render: (o) => when(o.submitted_at) },
         ], b.open_orders, { empty: 'No open orders' }) : emptyState('Not available', `The ${b.broker} broker interface has no order list.`))))),
       panel('Emergency stop', h('div', { class: 'row' },
-        st.kill_switch.engaged ? [badge('on: orders blocked', 'neg'), h('span', null, `${st.kill_switch.reason || ''} · `, when(st.kill_switch.at))] : [badge('off', 'pos'), h('span', { class: 'muted' }, 'Orders can go out only if every safety check passes.')],
+        st.kill_switch.engaged ? [badge('on: orders blocked', 'neg'), h('span', null, `${killReason(st.kill_switch.reason)} · `, when(st.kill_switch.at))] : [badge('off', 'pos'), h('span', { class: 'muted' }, 'Orders can go out only if every safety check passes.')],
         h('span', { style: { flex: 1 } }),
-        h('button', { class: 'btn danger', disabled: st.kill_switch.engaged, onclick: () => ctx.act('kill') }, icon('bolt'), 'Stop all new orders')),
-      { foot: 'Blocks every new order straight away. It doesn\'t sell what you hold or cancel orders already at the broker; do that in the broker\'s own dashboard. To turn it off: `tradeintel risk reset` in a terminal.' }),
+        killButton(ctx, st.kill_switch.engaged)),
+      { foot: 'Blocks every new order straight away. It doesn\'t sell what you hold or cancel orders already at the broker; do that in the broker\'s own dashboard. Turning it off needs you to type RESET.' }),
       h('div', { class: 'grid' },
         h('div', { class: 'c7' }, panel('Orders the AI considered', flush(audSlot), { meta: 'approved or refused, newest first' })),
         h('div', { class: 'c5' }, panel('Order details', detail))));
@@ -441,8 +461,8 @@ export function agents(ctx) {
       'The strategy rule gives a signal, three agents review it, a coordinator decides, then the safety check runs. ',
       'They are fixed rules that run once per check (not chatbots), so there is nothing to start or pause.'),
     h('div', { class: 'row' },
-      h('button', { class: 'btn primary', onclick: () => ctx.act('run-once').then(reload) }, icon('bolt'), 'Run a new check'),
-      h('button', { class: 'btn danger', onclick: () => ctx.act('kill') }, 'Stop all new orders')),
+      h('button', { class: 'btn primary', onclick: (e) => ctx.act('run-once', {}, { button: e.currentTarget }) }, icon('bolt'), 'Run a new check'),
+      killButton(ctx, ctx.state.kill_switch.engaged)),
     h('div', { class: 'grid' },
       h('div', { class: 'c7' }, panel('How a check flows', graphSlot, { meta: 'click a step for details' })),
       h('div', { class: 'c5' }, panel('Step details', nodeSlot))),
@@ -568,9 +588,9 @@ export function risk(ctx) {
     h('div', { class: 'grid' },
       h('div', { class: 'c5' }, panel('Emergency stop', h('div', { class: 'stack' },
         h('div', { class: 'row' }, r.kill_switch.engaged ? badge('on: orders blocked', 'neg') : badge('off', 'pos'),
-          r.kill_switch.engaged ? h('span', null, r.kill_switch.reason, ' · ', when(r.kill_switch.at)) : h('span', { class: 'muted' }, 'Turns on by itself if the account loses too much in a day or from its peak.')),
-        h('div', { class: 'row' }, h('button', { class: 'btn danger', disabled: r.kill_switch.engaged, onclick: () => ctx.act('kill').then(() => load(true)) }, icon('bolt'), 'Stop all new orders')),
-        h('div', { class: 'small muted' }, 'It only blocks new orders; what you hold stays. To turn it off, check why it went on, then run `tradeintel risk reset` in a terminal and type RESET.')))),
+          r.kill_switch.engaged ? h('span', null, killReason(r.kill_switch.reason), ' · ', when(r.kill_switch.at)) : h('span', { class: 'muted' }, 'Turns on by itself if the account loses too much in a day or from its peak.')),
+        h('div', { class: 'row' }, killButton(ctx, r.kill_switch.engaged)),
+        h('div', { class: 'small muted' }, 'It only blocks new orders; what you hold stays. To turn it off, check why it went on first; you\'ll be asked to type RESET.')))),
       h('div', { class: 'c7' }, panel('How close the account is to each limit', h('div', { class: 'stack', style: { gap: '14px' } }, r.utilisation.map(utilRow))))),
     h('div', { class: 'grid' },
       h('div', { class: 'c5' }, panel('The limits', flush(table([{ label: 'Rule', render: (x) => LIMIT_NAMES[x.k]?.[0] || x.k }, { label: 'Setting', num: true, render: (x) => h('span', { class: 'mono' }, (LIMIT_NAMES[x.k]?.[1] || String)(x.v)) }],
@@ -778,7 +798,7 @@ export function settings(ctx) {
           ['Close dialogs', h('kbd', null, 'Esc')], ['Toggle sidebar', h('span', null, h('kbd', null, 'Ctrl'), ' ', h('kbd', null, 'B'))]])),
         panel('Risk limits', pre(st.risk), { foot: 'Read-only. Edit config/local.yaml and restart; nothing at runtime writes risk configuration.' }),
         panel('Not available in this build', h('ul', { style: { margin: 0, paddingLeft: '18px' } },
-          ['Enabling execution or live trading from the UI', 'Editing risk limits at runtime', 'Clearing the kill switch (CLI only)', 'Cancelling orders / closing positions',
+          ['Enabling execution or live trading from the UI', 'Editing risk limits at runtime', 'Cancelling orders / closing positions',
             'Human-approval order queue', 'Agent start/pause (agents run inside decision cycles)', 'Custom dashboard layouts', 'Voice input/output'].map((x) => h('li', { class: 'muted' }, x)))),
         panel('About', h('div', { class: 'small muted' }, 'Charts by ', h('a', { href: 'https://www.tradingview.com/', target: '_blank', rel: 'noopener' }, 'TradingView Lightweight Charts™'),
           ' (Apache-2.0, see vendor/lightweight-charts.LICENSE.txt).')))));

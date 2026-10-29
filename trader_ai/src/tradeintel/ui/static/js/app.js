@@ -36,7 +36,19 @@ const ACTIONS = {
         h('div', { class: 'note warn small' }, 'It does not sell what you already hold, and it does not cancel orders already waiting at the broker.'),
         h('div', { class: 'small muted' }, 'To turn it off later, run `tradeintel risk reset` in a terminal and type RESET.')),
     }),
+    busy: 'Turning on the emergency stop…',
     done: () => 'Emergency stop is on. New orders are blocked.', remount: true,
+  },
+  'reset-kill': {
+    confirm: (st) => ({
+      title: 'Turn off the emergency stop?', danger: true, confirm: 'Turn it off', typed: 'RESET',
+      body: h('div', { class: 'stack' },
+        h('div', null, 'It was turned on: ', h('b', null, (st.kill_switch.reason || 'reason not recorded').replace(/^ui: engaged from UI$/, 'turned on from this app').replace(/^ui: /, '')), st.kill_switch.at ? [' (', fmt.time(st.kill_switch.at), ')'] : ''),
+        h('div', null, 'Turning it off lets new orders through again, but only if every other safety check passes. It also clears the losing-streak pause.'),
+        h('div', { class: 'small muted' }, st.mode.execution_enabled ? 'Paper orders are ON, so orders can go out after this.' : 'Orders are off in the settings, so nothing will be sent either way.')),
+    }),
+    busy: 'Turning off the emergency stop…',
+    done: () => 'Emergency stop is off. Every other safety check still applies.', remount: true,
   },
   'run-once': {
     confirm: (st) => ({
@@ -45,34 +57,47 @@ const ACTIONS = {
         ? h('div', { class: 'note neg' }, 'Paper orders are ON. If a promoted strategy signals and every safety check passes, a paper order will be sent.')
         : h('div', null, 'The AI looks at the latest prices and records what it would do. Orders are off, so nothing is sent.'),
     }),
+    busy: 'Running a new check… this takes about 10 seconds.',
     done: (r) => `Check finished: ${({ abstain: 'no trade, the AI held back', hold: 'nothing changed', exit: 'wants to close', enter_long: 'wants to buy', enter_short: 'wants to sell short' })[r.result?.decision] || r.result?.status || 'done'}.`, remount: true,
   },
   research: {
     confirm: (st, args) => ({ title: `Test ${args.strategy} on history?`, confirm: 'Run test',
       body: h('div', null, 'This takes a few seconds. The result is recorded in the Strategy lab, and the run counts as an extra attempt for this strategy.') }),
+    busy: 'Testing on history… about 10–20 seconds.',
     done: (r) => `Test recorded as experiment #${r.experiment_id}: ${r.gate.passed ? 'passed' : 'failed'} the safety gate.`,
   },
-  backtest: { done: () => 'Quick backtest finished. It is for a first look only, not proof.' },
-  ingest: { done: (r) => `Price data refreshed: ${r.result.rows} daily bars, latest ${fmt.date(r.result.last)}.`, remount: true },
-  'news-ingest': { done: () => 'News and calendar refreshed.' },
+  backtest: { busy: 'Running a quick backtest…', done: () => 'Quick backtest finished. It is for a first look only, not proof.' },
+  ingest: { busy: 'Downloading price data…', done: (r) => `Price data refreshed: ${r.result.rows} daily bars, latest ${fmt.date(r.result.last)}.`, remount: true },
+  'news-ingest': { busy: 'Refreshing news & calendar…', done: () => 'News and calendar refreshed.' },
 };
 
-async function act(name, args = {}, { skipConfirm = false } = {}) {
+// While an action runs: a message stays on screen and the pressed button shows a spinner,
+// so it is always visible that something is happening; the message then turns into the result.
+async function act(name, args = {}, { skipConfirm = false, button = null } = {}) {
   const spec = ACTIONS[name];
   if (!spec) throw new Error(`unknown action ${name}`);
   if (spec.confirm && !skipConfirm && !(await confirmDialog(spec.confirm(app.state, args)))) return null;
+  const note = toast(h('span', { class: 'row', style: { gap: '10px', flexWrap: 'nowrap' } }, h('span', { class: 'spin' }), spec.busy || 'Working…'), 'busy', { sticky: true });
+  let restore = null;
+  if (button) {
+    const old = [...button.childNodes];
+    button.disabled = true;
+    button.replaceChildren(h('span', { class: 'spin' }), 'Working…');
+    restore = () => { button.disabled = false; button.replaceChildren(...old); };
+  }
   companion?.setActivity('working');
   try {
     const r = await api.post(`/api/actions/${name}`, args);
-    if (r.ok === false) toast(`Failed: ${r.error}`, 'neg');
-    else toast(spec.done(r), 'pos');
+    if (r.ok === false) note.update(`Didn't work: ${r.error}`, 'neg');
+    else note.update(spec.done(r), 'pos');
     await refreshState();
     if (spec.remount && r.ok !== false) mount();
     return r;
   } catch (e) {
-    toast(`Failed: ${e.message}`, 'neg');
+    note.update(`Didn't work: ${e.message}`, 'neg');
     return { ok: false, error: e.message };
   } finally {
+    restore?.();
     companion?.setActivity(null);
   }
 }
@@ -247,6 +272,7 @@ function baseItems() {
     { label: 'Refresh price data', group: 'action', kw: 'ingest bars market data', run: () => act('ingest') },
     { label: 'Refresh news & calendar', group: 'action', kw: 'ingest events', run: () => act('news-ingest') },
     { label: 'Stop all new orders (emergency stop)', group: 'action', kw: 'kill switch halt pause', run: () => act('kill') },
+    { label: 'Turn off the emergency stop', group: 'action', kw: 'kill switch reset resume', run: () => act('reset-kill', { confirm: 'RESET' }) },
     { label: 'Reload account from the broker', group: 'action', kw: 'alpaca account refresh', run: () => api.post('/api/actions/refresh-broker').then(refreshState) },
     { label: 'Ask the assistant', group: 'assistant', kw: 'companion', run: () => companion.open() },
     { label: 'Toggle sidebar', group: 'view', run: () => app.toggleNav() },

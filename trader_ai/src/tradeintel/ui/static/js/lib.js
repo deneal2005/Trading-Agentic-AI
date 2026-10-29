@@ -71,7 +71,7 @@ export const fmt = {
   time(iso) {
     if (!iso) return '—';
     const d = new Date(iso);
-    return Number.isNaN(+d) ? String(iso) : d.toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return Number.isNaN(+d) ? String(iso) : d.toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
   },
   date(iso) {
     if (!iso) return '—';

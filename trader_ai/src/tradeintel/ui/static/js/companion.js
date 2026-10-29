@@ -32,7 +32,9 @@ export function createCompanion({ act, getState, route }) {
       h('button', { class: 'btn icon primary', type: 'submit', 'aria-label': 'Send' }, icon('send'))));
   const el = h('div', null, wrap, panelEl);
 
-  let pos = store.get('cmp.anchor', null);  // {r, b}: distance from the right/bottom edges, so the orb keeps its corner on resize
+  // {l|r, b}: distance from the nearer side edge and the bottom, so the orb keeps its corner on resize.
+  // Default: the sidebar's empty bottom corner (above Settings), where it covers no page content.
+  let pos = store.get('cmp.anchor2', null);
   let pinned = store.get('cmp.pinned', false);
   let busy = null;          // 'thinking' | 'working' | null
   let lastState = null; let lastErr = null;
@@ -45,8 +47,8 @@ export function createCompanion({ act, getState, route }) {
     return { x: Math.min(Math.max(p.x, MARGIN), innerWidth - SIZE - MARGIN), y: Math.min(Math.max(p.y, MARGIN), innerHeight - SIZE - MARGIN) };
   }
   // pos stays null until the user drags, so the default follows the window's bottom-right corner
-  const cur = () => clamp(pos ? { x: innerWidth - pos.r, y: innerHeight - pos.b } : { x: innerWidth - SIZE - 24, y: innerHeight - SIZE - 24 });
-  const anchor = (p) => ({ r: innerWidth - p.x, b: innerHeight - p.y });
+  const cur = () => clamp(pos ? { x: pos.l != null ? pos.l : innerWidth - pos.r, y: innerHeight - pos.b } : { x: MARGIN, y: innerHeight - SIZE - 110 });
+  const anchor = (p) => (p.x + SIZE / 2 < innerWidth / 2 ? { l: p.x, b: innerHeight - p.y } : { r: innerWidth - p.x, b: innerHeight - p.y });
   function place() {
     const p = cur();
     Object.assign(wrap.style, { left: `${p.x}px`, top: `${p.y}px` });
@@ -75,7 +77,7 @@ export function createCompanion({ act, getState, route }) {
     if (drag?.moved) { // snap to the nearest side edge
       const p = cur();
       pos = anchor(clamp({ x: p.x + SIZE / 2 < innerWidth / 2 ? MARGIN : innerWidth - SIZE - MARGIN, y: p.y }));
-      place(); store.set('cmp.anchor', pos);
+      place(); store.set('cmp.anchor2', pos);
       orb._suppressClick = true;
     }
     drag = null;
@@ -100,7 +102,7 @@ export function createCompanion({ act, getState, route }) {
     wrap.style.display = v ? 'none' : '';
     if (v) panelEl.style.display = 'none';
   }
-  function resetPosition() { pos = null; store.set('cmp.anchor', null); place(); }
+  function resetPosition() { pos = null; store.set('cmp.anchor2', null); place(); }
 
   // ---------------------------------------------------------- state & notifications
   function update(st, err) {

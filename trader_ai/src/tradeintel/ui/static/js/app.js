@@ -144,7 +144,7 @@ function buildShell() {
         h('span', { class: 'small dim' }, 'Runs on this PC · paper only'))),
     h('div', { class: 'main' },
       h('header', { class: 'topbar' }, titleEl, envEl, clockEl, h('div', { class: 'spacer' }), statusBtn,
-        h('button', { class: 'btn sm', onclick: openPalette, title: 'Search and commands (Ctrl+K)', 'aria-label': 'Search and commands' }, icon('search'), h('span', null, 'Search'), h('kbd', null, 'Ctrl K')),
+        h('button', { class: 'btn sm', onclick: openPalette, title: 'Search and commands (Ctrl+K)', 'aria-label': 'Search and commands' }, icon('search'), h('span', { class: 'hide-md' }, 'Search'), h('kbd', { class: 'hide-md' }, 'Ctrl K')),
         h('button', { class: 'btn icon ghost', onclick: () => companion.toggle(), title: 'Ask the assistant (Ctrl+.)', 'aria-label': 'Ask the assistant' }, h('span', { class: 'brand-mark' }))),
       content));
   document.getElementById('app').replaceChildren(shell);

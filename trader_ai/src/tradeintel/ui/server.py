@@ -152,6 +152,8 @@ def make_handler(app: App):
         def _api(self, fn):
             try:
                 self._json(200, fn())
+            except ConnectionError:  # the page cancelled the request (e.g. switched screens): nothing to report
+                return
             except KeyError as e:
                 self._json(404, {"error": f"not found: {e}"})
             except ValueError as e:  # bad query/body values

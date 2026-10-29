@@ -4,6 +4,21 @@ import { h, s, api, fmt, when, panel, flush, badge, table, kv, stat, meter, load
 
 const killReason = (r) => (r || 'no reason recorded').replace(/^ui: engaged from UI$/, 'turned on from this app').replace(/^ui: /, '');
 
+// Currencies whose announcements can move the traded market: both legs of an FX pair, else the account currency.
+function relevantCcys(st) {
+  const i = st.market.instrument;
+  return st.market.asset_class === 'forex' && /^[A-Z]{6}$/.test(i) ? [i.slice(0, 3), i.slice(3)] : [st.broker.currency || 'USD'];
+}
+
+const ACTION_WORDS = { abstain: 'No trade', hold: 'No change', exit: 'Close position', enter_long: 'Buy', enter_short: 'Sell short' };
+function decisionText(d) {
+  const r = (d.reasons || []).join('; ');
+  const why = r.startsWith('objections to new entry: ')
+    ? `held back because ${r.slice(25).split('; ').map(plainObjection).join(', and ')}`
+    : r.replace(/^signal unchanged$/, 'the signal hasn’t changed').replace(/^signal flat$/, 'the signal turned flat');
+  return `${ACTION_WORDS[d.action] || d.action} on ${d.instrument}: ${why}`;
+}
+
 // One control for the emergency stop: turns it on, or, when it's on, turns it off again (you type RESET).
 function killButton(ctx, engaged) {
   return engaged
@@ -92,7 +107,7 @@ function sourceBadge(src) {
   return src === 'SYNTHETIC' ? badge('SYNTHETIC', 'warn') : badge(src, 'info');
 }
 
-function actionBadge(a) { return badge(a.replace('_', ' '), ACTION_TONE[a] || ''); }
+function actionBadge(a) { return badge((ACTION_WORDS[a] || a.replace('_', ' ')).toLowerCase(), ACTION_TONE[a] || ''); }
 
 function envLabel(st) {
   const b = st.broker;
@@ -182,7 +197,7 @@ export function overview(ctx) {
     h('div', { class: 'grid' },
       h('div', { class: 'c4' }, panel('Paper account', acct)),
       h('div', { class: 'c8' }, panel(`${ctx.state.market.instrument} price`, flush(chartSlot), {
-        meta: 'daily · arrows = strategy signal changes',
+        meta: 'daily',
         tools: h('a', { class: 'btn sm ghost', href: '#/markets' }, 'Open chart'),
       })),
       h('div', { class: 'c4' }, panel('Safety', safety, { tools: h('a', { class: 'btn sm ghost', href: '#/risk' }, 'Details') })),
@@ -223,7 +238,7 @@ export function overview(ctx) {
     for (const p of pos) unreal = q && p.instrument === q.instrument && unreal != null ? unreal + ((q.bid + q.ask) / 2 - p.avg_price) * p.units : null;
     acct.replaceChildren(h('div', { class: 'stack', style: { gap: '14px' } },
       h('div', null, h('div', { class: 'small muted' }, 'Total value'),
-        h('div', { class: 'mono', style: { fontSize: '30px', fontWeight: 500, lineHeight: 1.2 } }, fmt.money(b.equity, '', 2), h('span', { class: 'muted', style: { fontSize: '15px', marginLeft: '6px' } }, b.currency))),
+        h('div', { class: 'mono', style: { fontSize: 'clamp(22px, 2.2vw, 30px)', fontWeight: 500, lineHeight: 1.2 } }, fmt.money(b.equity, '', 2), h('span', { class: 'muted', style: { fontSize: '15px', marginLeft: '6px' } }, b.currency))),
       kv([['Cash', h('span', { class: 'mono' }, fmt.money(b.cash))],
         ['Change today', day == null ? h('span', { class: 'dim', title: 'Starts counting after today’s first check' }, '—') : h('span', { class: `mono ${fmt.tone(day)}` }, fmt.signed(day))],
         ['Open positions', pos.length ? pos.map((p) => `${p.instrument} ${fmt.signed(p.units, 0)}`).join(', ') : 'None'],
@@ -234,7 +249,8 @@ export function overview(ctx) {
 
   function renderAttention(st, events) {
     const now = Date.now();
-    const upcoming = (events || []).filter((e) => e.impact === 'high' && new Date(e.event_time) > now).slice(0, 3);
+    const ccys = relevantCcys(st);
+    const upcoming = (events || []).filter((e) => e.impact === 'high' && ccys.includes(e.currency) && new Date(e.event_time) > now).slice(0, 3);
     const items = st.alerts.filter((a) => a.level !== 'info').map((a) => h('div', { class: `alert-item ${a.level}`, style: { padding: '10px 0' } }, h('div', { class: 'bar' }),
       h('div', null, h('div', { style: { fontWeight: 500 } }, a.title), a.detail ? h('div', { class: 'small muted' }, a.detail) : null)));
     for (const e of upcoming) items.push(h('div', { class: 'alert-item', style: { padding: '10px 0' } }, h('div', { class: 'bar' }),
@@ -715,22 +731,26 @@ export function research(ctx) {
 // ============================================================ News & events
 export function news(ctx) {
   const slot = h('div');
+  const ccys = relevantCcys(ctx.state);
+  const allBox = h('input', { type: 'checkbox', checked: store.get('news.all', false), onchange: (e) => { store.set('news.all', e.target.checked); load(); } });
   const load = () => loadInto(slot, (sg) => api.get('/api/news', sg), (n) => h('div', { class: 'grid' },
-    h('div', { class: 'c7' }, panel('Economic calendar', flush(table([
+    h('div', { class: 'c12' }, panel('Economic calendar', flush(table([
       { label: 'Time', render: (e) => when(e.event_time) }, { label: 'Ccy', key: 'currency' },
       { label: 'Impact', render: (e) => badge(e.impact, e.impact === 'high' ? 'neg' : e.impact === 'medium' ? 'warn' : '') },
       { label: 'Event', key: 'title' }, { label: 'Fcst', key: 'forecast' }, { label: 'Prev', key: 'previous' }, { label: 'Actual', key: 'actual' },
-    ], n.events, { empty: 'No events stored for this week yet. Press “Refresh news & calendar”.', maxHeight: '520px' })), { meta: 'times in your local time zone' })),
-    h('div', { class: 'c5' }, h('div', { class: 'stack', style: { gap: '12px' } },
+    ], allBox.checked ? n.events : n.events.filter((e) => ccys.includes(e.currency)), { empty: n.events.length ? `No ${ccys.join('/')} events stored for this week.` : 'No events stored for this week yet. Press “Refresh news & calendar”.', maxHeight: '520px' })),
+      { meta: allBox.checked ? 'all countries · your local time' : `only ${ccys.join(' and ')}, which can move ${ctx.state.market.instrument} · your local time` })),
+    h('div', { class: 'c12' }, h('div', { class: 'grid' }, h('div', { class: 'c5' },
       panel('News sources', flush(table([{ label: 'Source', key: 'source' }, { label: 'Status', render: (x) => (x.ok ? badge('ok', 'pos') : badge('failed', 'neg')) },
         { label: 'Items', key: 'items', num: true, d: 0 }, { label: 'Checked', render: (x) => when(x.at, 'ago') }, { label: 'Error', render: (x) => h('span', { class: 'small muted' }, x.error || '') }],
-      n.health, { empty: 'No fetches recorded yet.' }))),
+      n.health, { empty: 'No fetches recorded yet.' })))), h('div', { class: 'c7' },
       panel('Headlines', flush(table([{ label: 'Ingested', render: (x) => when(x.ingested_at, 'ago') },
         { label: 'Source', render: (x) => badge(x.source, x.reliability === 'official' ? 'info' : '') },
         { label: 'Title', render: (x) => (safeUrl(x.url) ? h('a', { href: safeUrl(x.url), target: '_blank', rel: 'noopener noreferrer' }, x.title) : x.title) }],
-      n.news, { empty: 'No headlines stored yet.', maxHeight: '360px' })), { meta: 'from outside sources' })))));
+      n.news, { empty: 'No headlines stored yet.', maxHeight: '360px' })), { meta: 'from outside sources' }))))));
   const el = h('div', { class: 'stack', style: { gap: '12px' } },
     h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => ctx.act('news-ingest').then(load) }, icon('refresh'), 'Refresh news & calendar'),
+      h('label', { class: 'check' }, allBox, 'Show every country'),
       h('span', { class: 'small muted' }, 'From central-bank news feeds and the Forex Factory calendar (this week only).')), slot);
   load();
   return { el };
@@ -750,7 +770,7 @@ export function activity(ctx) {
   function load() {
     loadInto(slot, (sg) => Promise.all([api.get('/api/decisions?limit=200', sg), api.get('/api/audit?limit=300', sg), api.get('/api/logs?limit=400', sg)]), ([ds, au, lg]) => {
       rows = [
-        ...ds.map((d) => ({ at: d.decided_at, type: 'decision', level: 'INFO', text: `${d.action} · ${d.strategy} · ${d.instrument}: ${(d.reasons || []).join('; ')}`, raw: d })),
+        ...ds.map((d) => ({ at: d.decided_at, type: 'decision', level: 'INFO', text: decisionText(d), raw: d })),
         ...au.map((a) => ({ at: a.at, type: 'order', level: a.risk && !a.risk.approved ? 'WARNING' : 'INFO', text: `${a.order_result?.status || '—'} · ${a.idempotency_key}${a.risk && !a.risk.approved ? ' · ' + (a.risk.reasons || []).join('; ') : ''}`, raw: a })),
         ...lg.lines.map((l) => ({ at: l.ts, type: 'log', level: l.level, text: `${l.logger || ''} ${l.msg}`, raw: l })),
       ].sort((a, b) => ((a.at || '') < (b.at || '') ? 1 : -1));

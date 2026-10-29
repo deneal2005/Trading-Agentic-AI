@@ -159,7 +159,12 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; }
 .grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
 .c3 { grid-column: span 3; } .c4 { grid-column: span 4; } .c5 { grid-column: span 5; } .c6 { grid-column: span 6; }
 .c7 { grid-column: span 7; } .c8 { grid-column: span 8; } .c9 { grid-column: span 9; } .c12 { grid-column: span 12; }
-@media (max-width: 1280px) { .c3, .c4, .c5 { grid-column: span 6; } .c7, .c8, .c9 { grid-column: span 12; } }
+/* medium screens: side panels (3+9) stack; thirds/two-thirds become halves; a lone last half fills the row */
+@media (max-width: 1280px) {
+  .c3, .c9 { grid-column: span 12; } .c4, .c8 { grid-column: span 6; }
+  .grid > .c4:last-child:nth-child(odd) { grid-column: span 12; }
+  .topbar .hide-md { display: none; }
+}
 @media (max-width: 900px) {
   .grid > * { grid-column: span 12 !important; }
   .shell { --sidebar: 64px; }

@@ -200,7 +200,8 @@ def alerts(s: Settings, br: dict, data: dict, ks: dict) -> list[dict]:
 
     unit = "cents" if s.market.pip_size == 0.01 else "pips"
     if ks["engaged"]:
-        add("danger", f"kill:{ks.get('at')}", "Emergency stop is on: new orders are blocked", f"Reason: {ks.get('reason', '')}", ks.get("at"))
+        why = ks.get("reason", "").replace("ui: engaged from UI", "turned on from this app").removeprefix("ui: ")
+        add("danger", f"kill:{ks.get('at')}", "Emergency stop is on: new orders are blocked", f"Reason: {why}", ks.get("at"))
     if not br.get("available"):
         add("danger", "broker", f"Can't reach the {br.get('broker')} account", br.get("error", ""))
     elif br.get("quote_error"):

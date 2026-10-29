@@ -37,6 +37,19 @@ Market switched to SPY for the Alpaca paper account. Data: Yahoo SPY, 2000-01-03
 
 **Conclusion: no strategy is promotable on SPY, and no paper orders are justified.** The Alpaca paper broker can be connected and checked read-only, but `execution.enabled` must stay false.
 
+## E14: direction model (logistic regression) on REAL SPY daily (2026-10-29)
+`tradeintel model-eval`. The model predicts whether the next daily bar closes up, from 7 features (1/5/20-day returns, 20-day volatility, RSI 14, distance to SMA 50, ATR %), with C=0.1. Walk-forward 750/250 bars over all stored SPY bars (2000–2026): 23 folds, 5,750 out-of-sample predictions. Model version `20261029T142535`, saved as rejected.
+
+| | Accuracy | Log loss (lower is better) | Brier |
+|---|---|---|---|
+| Model | 53.6% | 0.6978 | 0.2521 |
+| Base rate: always predict the historical up-frequency | **54.6%** | **0.6896** | **0.2482** |
+| Persistence: predict yesterday's direction | 49.5% | 0.6992 | 0.2530 |
+
+**Rejected:** log loss 0.6978 doesn't beat the best baseline (0.6896).
+
+**Interpretation, in plain words:** 53.6% sounds better than a coin flip, but SPY goes up on about 55% of days. Simply always saying "up" scores 54.6%, which beats the model. Its probabilities aren't informative either. When it said ~35% chance of up, SPY rose 56% of the time, and when it said ~64%, SPY rose 53% of the time: its confident calls were slightly *worse* than average. So these 7 price-based features carry no usable next-day signal for SPY, which is consistent with E6–E11. A 1-point accuracy edge would also be far too small to survive costs.
+
 ## E1–E3: walk-forward baselines on synthetic EURUSD-like daily data (2026-10-29)
 Setup: 2010-01-01 to 2025-12-31 (4,174 business days), 20% holdout untouched, 750/250 walk-forward, 10 folds, parameters re-selected per fold from the grid, costs 1.2 pip spread + 0.5 pip slippage per side + 1% p.a. financing.
 

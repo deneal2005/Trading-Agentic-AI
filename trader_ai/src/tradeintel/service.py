@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,7 @@ from .execution.broker import Broker, BrokerError
 from .execution.paper import PaperBroker
 from .execution.pipeline import ExecutionPipeline
 from .experiments.registry import Registry
+from .jobs import JobStore, run_job
 from .news.store import NewsStore
 from .risk.engine import EventWindow, KillSwitch, OrderIntent, RiskEngine
 from .strategies.library import build
@@ -172,10 +174,25 @@ def update_loss_streak(state: StateStore, instrument: str, pos, mark: float | No
         state.set("open_trade", {"instrument": instrument, "direction": direction, "entry": pos.avg_price})
 
 
-def run_cycle(s: Settings, broker: Broker | None = None, now: datetime | None = None) -> dict:
+CHECK_STEPS = ["Refreshing the economic calendar", "Loading price data", "Working out the strategy signal",
+               "Checking the paper account", "AI agents reviewing", "Safety check and order"]
+
+
+def check(s: Settings, progress=lambda _: None) -> dict:
+    """One full check as a job body: refresh the calendar, then run a decision cycle."""
+    progress(CHECK_STEPS[0])
+    ensure_calendar(s)
+    try:
+        return {"ok": True, "result": run_cycle(s, progress=progress)}
+    except RuntimeError as e:  # another cycle holds the lock
+        return {"ok": False, "error": str(e)}
+
+
+def run_cycle(s: Settings, broker: Broker | None = None, now: datetime | None = None, progress=lambda _: None) -> dict:
     now = now or datetime.now(timezone.utc)
     m = s.market
     with single_instance(s.paths.db_path.parent / "cycle.lock"):
+        progress("Loading price data")
         bars = BarStore(s.paths.db_path).load(m.instrument, m.timeframe)
         if not bars.empty:  # a stored candle whose period isn't over yet must not drive a decision
             source = bars.attrs.get("source")
@@ -183,14 +200,17 @@ def run_cycle(s: Settings, broker: Broker | None = None, now: datetime | None = 
             bars.attrs["source"] = source
         if bars.empty:
             return {"status": "abstain", "reason": "no stored bars; run `tradeintel data ingest` first"}
+        progress("Working out the strategy signal")
         strat = build(s.live.strategy, **s.live.params)
         sig = strat.signals(bars)
         ns = NewsStore(s.paths.db_path)
         events = ns.events(now - timedelta(days=2), now + timedelta(days=2))
         for e in events:
             e["analysis"] = json.loads(e["analysis"]) if e.get("analysis") else None
+        progress("Checking the paper account")
         broker = broker or make_broker(s)
         try:
+            ExecutionPipeline(s.paths.db_path, broker, None, False).reconcile()  # follow up sent orders first
             pos = [p for p in broker.positions() if p.instrument == m.instrument]
             acct = broker.account()
         except BrokerError as e:
@@ -206,6 +226,7 @@ def run_cycle(s: Settings, broker: Broker | None = None, now: datetime | None = 
             except BrokerError:
                 mark = None
             update_loss_streak(state, m.instrument, pos[0] if pos else None, mark)
+        progress("AI agents reviewing")
         ctx = DecisionContext(m.instrument, bars, sig, strat.name, now, max_bar_age(s), cur, events,
                               regime=str(regime_labels(bars).iloc[-1]))
         d = coordinate(ctx, "multi")
@@ -216,6 +237,7 @@ def run_cycle(s: Settings, broker: Broker | None = None, now: datetime | None = 
         if d.action in ("hold", "abstain"):
             return out
 
+        progress("Safety check and order")
         promoted = strategy_promoted(s, strat.name)
         enabled = s.execution.enabled and (promoted or not s.live.require_promotion)
         if s.execution.enabled and not enabled:
@@ -258,12 +280,14 @@ def run_cycle(s: Settings, broker: Broker | None = None, now: datetime | None = 
 
 
 def run_service(s: Settings, interval_s: int = 900, max_cycles: int | None = None) -> None:
+    """Scheduled checks. Each one is recorded as a job, and a heartbeat tells the app when the next is due."""
+    jobs, state = JobStore(s.paths.db_path), StateStore(s.paths.db_path)
     n = 0
     while max_cycles is None or n < max_cycles:
-        try:
-            ensure_calendar(s)
-            log.info("cycle", extra={"data": run_cycle(s)})
-        except Exception:
-            log.exception("cycle failed")
+        out = run_job(jobs, "check", "Scheduled check", CHECK_STEPS, lambda p: check(s, p), source="service")
+        log.info("cycle", extra={"data": out})
+        now = datetime.now(timezone.utc)
+        state.set("service_heartbeat", {"pid": os.getpid(), "interval_s": interval_s, "at": now.isoformat(),
+                                        "next_at": (now + timedelta(seconds=interval_s)).isoformat()})
         n += 1
         time.sleep(interval_s)

@@ -11,7 +11,8 @@ from tradeintel.data.providers import SyntheticProvider
 # Most tests were written for EURUSD; pin it so they don't depend on the default market (SPY).
 FX = {"market": {"asset_class": "forex", "instrument": "EURUSD", "pip_size": 0.0001},
       "costs": {"spread_pips": 1.2, "slippage_pips": 0.5, "financing_rate_annual": 0.01},
-      "risk": {"max_leverage": 5.0}}
+      "risk": {"max_leverage": 5.0},
+      "execution": {"broker": "paper"}}  # never the broker from a developer's config/local.yaml
 
 
 @pytest.fixture

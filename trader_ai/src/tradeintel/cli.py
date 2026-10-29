@@ -234,9 +234,9 @@ def cmd_risk(s, a):
 
 
 def cmd_run_once(s, a):
-    from .service import ensure_calendar, run_cycle
-    ensure_calendar(s)
-    _print(run_cycle(s))
+    from .jobs import JobStore, run_job
+    from .service import CHECK_STEPS, check
+    _print(run_job(JobStore(s.paths.db_path), "check", "Check from the terminal", CHECK_STEPS, lambda p: check(s, p), source="cli"))
 
 
 def cmd_service(s, a):

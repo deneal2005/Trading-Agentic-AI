@@ -31,6 +31,8 @@ from urllib.parse import parse_qs, urlparse
 from ..config import Settings
 from . import api
 from .companion import Companion
+from ..jobs import JobStore, mark_abandoned, start_job
+from ..service import CHECK_STEPS
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
@@ -64,6 +66,8 @@ class App:
         self.cache = cache or api.BrokerCache(s)
         self.companion = companion or Companion(s, self.cache)
         self.hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        self.jobs = JobStore(s.paths.db_path)
+        mark_abandoned(self.jobs)  # anything an earlier app left 'running' can't still be running
 
     def get(self, path: str, q: dict):
         s, c = self.s, self.cache
@@ -91,9 +95,41 @@ class App:
             return api.logs_view(s, max(1, min(int(one("limit", "200")), 2000)), one("level"))
         if path == "/api/config":
             return api.config_view(s)
+        if path == "/api/activity":
+            return api.activity(s)
+        if path == "/api/jobs":
+            return [api._slim(j) for j in self.jobs.recent(max(1, min(int(one("limit", "30")), 200)))]
+        if path.startswith("/api/jobs/"):
+            job = self.jobs.get(int(path.rsplit("/", 1)[1]))
+            if not job:
+                raise KeyError(path)
+            return job
         if path == "/api/brain":
             return api.brain_view(s, max(1, min(int(one("history", "120")), 1000)))
         raise KeyError(path)
+
+    @property
+    def JOBS(self):
+        """Long actions run as tracked background jobs: name -> (body) -> (kind, label, steps, expected s, fn(progress))."""
+        s, c = self.s, self.cache
+        strat = lambda b: str(b.get("strategy", ""))  # noqa: E731
+
+        def check(p):
+            out = api.act_run_once(s, p)
+            c.get(force=True)  # the account view should reflect the check
+            return out
+        return {
+            "run-once": lambda b: ("check", "Check started from the app", CHECK_STEPS, 12, check),
+            "ingest": lambda b: ("ingest", "Refreshing price data", ["Downloading and checking prices"], 8, lambda p: api.act_ingest(s, p)),
+            "news-ingest": lambda b: ("news", "Refreshing news & calendar", ["Fetching news feeds and the economic calendar"], 10,
+                                      lambda p: api.act_news_ingest(s, p)),
+            "backtest": lambda b: ("backtest", f"Quick backtest: {strat(b)}", ["Running the backtest", "Comparing with buy-and-hold"], 8,
+                                   lambda p: api.act_backtest(s, strat(b), b.get("params") if isinstance(b.get("params"), dict) else None, p)),
+            "research": lambda b: ("research", f"History test: {strat(b)}", ["Testing on 20 years of history", "Writing the report"], 30,
+                                   lambda p: api.act_research(s, strat(b), p)),
+            "reconcile": lambda b: ("reconcile", "Checking order status with the broker", ["Asking the broker about sent orders"], 5,
+                                    lambda p: api.act_reconcile(s, p)),
+        }
 
     def post(self, path: str, body: dict):
         s = self.s
@@ -103,19 +139,11 @@ class App:
             return api.act_kill(s, str(body.get("reason", "")))
         if path == "/api/actions/reset-kill":
             return api.act_reset_kill(s, str(body.get("confirm", "")))
-        if path == "/api/actions/run-once":
-            out = api.act_run_once(s)
-            self.cache.get(force=True)
-            return out
-        if path == "/api/actions/ingest":
-            return api.act_ingest(s)
-        if path == "/api/actions/news-ingest":
-            return api.act_news_ingest(s)
-        if path == "/api/actions/backtest":
-            params = body.get("params") if isinstance(body.get("params"), dict) else None
-            return api.act_backtest(s, str(body.get("strategy", "")), params)
-        if path == "/api/actions/research":
-            return api.act_research(s, str(body.get("strategy", "")))
+        name = path.removeprefix("/api/actions/")
+        if name in self.JOBS:
+            kind, label, steps, expected, fn = self.JOBS[name](body)
+            job, started = start_job(self.jobs, kind, label, steps, fn, "app", expected)
+            return {"ok": True, "job": job, "started": started}
         if path == "/api/actions/refresh-broker":
             return {"ok": True, "broker": self.cache.get(force=True)}
         raise KeyError(path)

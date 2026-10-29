@@ -1,6 +1,18 @@
 // Screens. Each page is (ctx) => { el, destroy? }. Every number shown comes from
 // the backend; anything unavailable is labelled as such.
 import { h, s, api, fmt, when, panel, flush, badge, table, kv, stat, meter, loadInto, loading, emptyState, errorState, pre, icon, store } from './lib.js';
+import { stateBadge, jobOutcome, stepList, stepLine } from './activity.js';
+
+// The single most useful next action, from the real state. Order = most urgent first.
+function nextStep(st, d) {
+  if (st.kill_switch.engaged) return 'The emergency stop is on. If you didn’t mean to turn it on, press “Turn off emergency stop…”.';
+  if (!st.broker.available) return 'The broker can’t be reached. Check your internet connection and the keys in trader_ai/.env.';
+  if (st.data.stale) return 'Price data is out of date. Press “Refresh price data” on the Chart page.';
+  if (st.alerts.some((a) => a.key.startsWith('calendar:'))) return 'This week’s economic calendar is missing. Press “Refresh news & calendar” on the News & calendar page.';
+  if (!d) return 'Press “Run a new check” to see what the AI makes of the latest prices.';
+  if (!st.activity?.service?.alive) return 'Nothing urgent. Checks only run when you press “Run a new check”; to run them automatically, start `tradeintel service` in a terminal.';
+  return 'Nothing to do. The scheduler runs the next check automatically.';
+}
 
 const killReason = (r) => (r || 'no reason recorded').replace(/^ui: engaged from UI$/, 'turned on from this app').replace(/^ui: /, '');
 
@@ -193,6 +205,7 @@ export function overview(ctx) {
   const recent = h('div');
   let chartObj = null;
   let lastDecision = null;
+  let liveCheck = ctx.state.activity?.running.find((j) => j.kind === 'check') || null;
   let events = [];
 
   const el = h('div', { class: 'stack', style: { gap: '16px' } }, hero,
@@ -208,6 +221,16 @@ export function overview(ctx) {
 
   function renderHero(st) {
     const d = lastDecision;
+    if (liveCheck) {  // a check is running right now (from any tab, the terminal or the scheduler)
+      hero.replaceChildren(
+        h('div', { class: 'eyebrow' }, `${st.market.instrument} · daily`, h('span', { class: 'sep' }, '·'), `started ${({ app: 'from this app', service: 'by the scheduler', cli: 'from the terminal' })[liveCheck.source] || ''}`,
+          h('span', { class: 'sep' }, '·'), `${Math.round(liveCheck.elapsed_s)} s so far`),
+        h('h2', null, `Checking ${st.market.instrument} now… `, h('span', { class: 'ai' }, liveCheck.step + '.')),
+        h('p', { class: 'why' }, liveCheck.slow ? `This is taking longer than usual (normally about ${liveCheck.expected_s} s). It is still running; the steps below show where.` : 'The result will replace this as soon as the check finishes.'),
+        stepList(liveCheck),
+        h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: true, dataset: { job: 'check' } }, h('span', { class: 'spin' }), 'Check running…')));
+      return;
+    }
     if (d === undefined) {  // first fetch still running: don't flash an empty rail
       hero.replaceChildren(h('div', { class: 'eyebrow' }, `${st.market.instrument} · daily`), h('h2', null, 'Loading the latest check…'), loading(2));
       return;
@@ -222,11 +245,11 @@ export function overview(ctx) {
       h('h2', null, s.h),
       h('p', { class: 'why' }, s.why),
       rail(st, d),
+      h('div', { class: 'next' }, h('b', null, 'What to do next: '), nextStep(st, d)),
       h('div', { class: 'actions' },
-        h('button', { class: 'btn primary', onclick: (e) => ctx.act('run-once', {}, { button: e.currentTarget }) }, icon('bolt'), 'Run a new check'),
+        h('button', { class: 'btn primary', dataset: { job: 'check' }, onclick: (e) => ctx.act('run-once', {}, { button: e.currentTarget }) }, icon('bolt'), 'Run a new check'),
         st.kill_switch.engaged ? killButton(ctx, true) : null,
-        d ? h('a', { class: 'btn ghost', href: `#/agents?decision=${d.id}` }, 'See how it decided') : null,
-        h('span', { class: 'small muted' }, 'Checks run when you press this, or on a schedule while `tradeintel service` is running.')));
+        d ? h('a', { class: 'btn ghost', href: `#/agents?decision=${d.id}` }, 'See how it decided') : null));
   }
 
   function renderAccount(st) {
@@ -260,7 +283,17 @@ export function overview(ctx) {
     attention.replaceChildren(items.length ? h('div', null, items) : emptyState('Nothing needs your attention', 'Warnings and big economic announcements show up here.'));
   }
 
+  // Recent work from the job table (every check, refresh and test, including failures).
+  function renderJobs(jobs) {
+    if (!jobs?.length) return false;
+    recent.replaceChildren(h('div', { class: 'stack', style: { gap: '10px' } }, jobs.slice(0, 6).map((j) => h('div', { class: 'jrow' },
+      stateBadge(j), h('div', { style: { minWidth: 0 } }, h('div', { class: 'jlabel' }, j.label), h('div', { class: 'small muted' }, j.state === 'running' ? stepLine(j) : jobOutcome(j))),
+      h('span', { class: 'small dim nowrap' }, fmt.ago(j.started_at))))));
+    return true;
+  }
+
   function renderRecent(ds, au) {
+    if (renderJobs(ctx.state.activity?.recent)) return;
     const rows = [
       ...ds.map((d) => ({ at: d.decided_at, text: [actionBadge(d.action), ' ', `${STRAT_NAMES[d.strategy] || d.strategy} check on ${d.instrument}`], link: `#/agents?decision=${d.id}` })),
       ...au.map((a) => ({ at: a.at, text: [badge(a.risk?.approved ? 'order approved' : 'order refused', a.risk?.approved ? 'pos' : 'warn'), ' ', a.intent?.instrument || ''], link: '#/execution' })),
@@ -301,6 +334,13 @@ export function overview(ctx) {
     el,
     // state polls every 10 s; the heavier panels refresh every minute
     onState(st) { renderHero(st); renderAccount(st); renderAttention(st, events); if (++n % 6 === 0) refresh(st); },
+    onActivity(act) {
+      const was = liveCheck;
+      liveCheck = act?.running.find((j) => j.kind === 'check') || null;
+      if (was && !liveCheck) refresh(ctx.state);  // it just finished: load the new decision
+      else renderHero(ctx.state);
+      renderJobs(act?.recent);
+    },
     destroy() { chartObj?.destroy(); },
   };
 }
@@ -385,7 +425,7 @@ export function markets(ctx) {
     parts.push(panel('Price data', kv([
       ['Source', sourceBadge(d.source)], ['Bars', d.rows], ['Last bar', d.available ? fmt.date(new Date(d.candles[d.candles.length - 1].time * 1000).toISOString()) : null],
       ['Status', live ? (cur.data.stale ? badge('stale', 'warn') : badge('fresh', 'pos')) : badge('reference')],
-    ]), { tools: h('button', { class: 'btn sm', onclick: () => ctx.act('ingest').then(load) }, icon('refresh'), 'Refresh price data') }));
+    ]), { tools: h('button', { class: 'btn sm', dataset: { job: 'ingest' }, onclick: (e) => ctx.act('ingest', {}, { button: e.currentTarget }).then(load) }, icon('refresh'), 'Refresh price data') }));
     if (live) {
       parts.push(panel('Live price', q ? kv([['Sell / buy price', `${fmt.num(q.bid)} / ${fmt.num(q.ask)}`], ['Gap', `${fmt.num(q.spread)}`], ['As of', when(q.time)],
         ['Source', cur.broker.broker === 'alpaca' ? 'Alpaca (IEX exchange, best of 3 snapshots)' : cur.broker.broker]])
@@ -399,66 +439,139 @@ export function markets(ctx) {
 }
 
 // ============================================================ Execution
-export function execution(ctx) {
-  const el = h('div', { class: 'stack', style: { gap: '12px' } });
-  const audSlot = h('div');
-  const detail = h('div');
-  function render(st) {
-    const b = st.broker;
-    const env = envLabel(st);
-    const enabled = st.mode.execution_enabled;
-    el.replaceChildren(
-      h('div', { class: `note ${b.available ? '' : 'neg'}` }, h('b', null, b.available ? `${b.broker === 'paper' ? 'Internal' : b.broker[0].toUpperCase() + b.broker.slice(1)} paper account ${b.account}. ` : 'Broker not connected. '),
-        b.available ? (enabled ? 'Paper orders are on for strategies that passed every test. ' : 'Orders are off: the AI only watches and records. ') + 'Real-money trading is not possible in this app.' : b.error),
-      panel('Order mode', h('div', { class: 'stack' },
-        h('div', { class: 'ladder' },
-          h('div', { class: `step ${!enabled ? 'on' : ''}` }, h('b', null, 'Watching only'), 'The AI records what it would do. Nothing is sent.'),
-          h('div', { class: `step ${enabled ? 'on' : ''}` }, h('b', null, 'Paper orders'), 'Practice orders, only for strategies that passed every test, after the safety check.'),
-          h('div', { class: 'step off' }, h('b', null, 'Approve each order'), 'Not built yet.'),
-          h('div', { class: 'step off' }, h('b', null, 'Real money'), 'Not possible in this app.')),
-        h('div', { class: 'small muted' }, 'To change the mode, edit execution.enabled in config/local.yaml and restart. This screen can\'t switch it, on purpose.'))),
-      h('div', { class: 'grid' },
-        h('div', { class: 'c6' }, panel('Open positions', flush(table([
-          { label: 'Instrument', key: 'instrument' }, { label: 'Units', num: true, render: (p) => fmt.signed(p.units, 0) },
-          { label: 'Avg price', num: true, render: (p) => fmt.num(p.avg_price) }, { label: 'Stop', num: true, render: (p) => (p.stop_price ? fmt.num(p.stop_price) : h('span', { class: 'dim', title: 'not reported by broker' }, '—')) },
-        ], b.positions || [], { empty: b.available ? 'No open positions' : 'Broker unavailable' })), { meta: b.available ? `${b.broker} · ${fmt.ago(b.fetched_at)}` : '' })),
-        h('div', { class: 'c6' }, panel('Orders waiting at the broker', flush(b.open_orders ? table([
-          { label: 'Symbol', key: 'symbol' }, { label: 'Side', key: 'side' }, { label: 'Type', key: 'type' }, { label: 'Qty', key: 'qty', num: true },
-          { label: 'Stop', key: 'stop_price', num: true }, { label: 'Status', render: (o) => badge(o.status) }, { label: 'Submitted', render: (o) => when(o.submitted_at) },
-        ], b.open_orders, { empty: 'No open orders' }) : emptyState('Not available', `The ${b.broker} broker interface has no order list.`))))),
-      panel('Emergency stop', h('div', { class: 'row' },
-        st.kill_switch.engaged ? [badge('on: orders blocked', 'neg'), h('span', null, `${killReason(st.kill_switch.reason)} · `, when(st.kill_switch.at))] : [badge('off', 'pos'), h('span', { class: 'muted' }, 'Orders can go out only if every safety check passes.')],
-        h('span', { style: { flex: 1 } }),
-        killButton(ctx, st.kill_switch.engaged)),
-      { foot: 'Blocks every new order straight away. It doesn\'t sell what you hold or cancel orders already at the broker; do that in the broker\'s own dashboard. Turning it off needs you to type RESET.' }),
-      h('div', { class: 'grid' },
-        h('div', { class: 'c7' }, panel('Orders the AI considered', flush(audSlot), { meta: 'approved or refused, newest first' })),
-        h('div', { class: 'c5' }, panel('Order details', detail))));
-    detail.replaceChildren(emptyState('Pick an order', 'Its safety checks and result appear here.'));
-    loadInto(audSlot, (sg) => api.get('/api/audit?limit=200', sg), (rows) => table([
-      { label: 'Time', render: (a) => when(a.at) }, { label: 'Mode', key: 'mode' },
-      { label: 'Instrument', render: (a) => a.intent?.instrument || '—' }, { label: 'Side', render: (a) => (a.intent ? (a.intent.direction === 1 ? 'long' : 'short') : '—') },
-      { label: 'Units', num: true, render: (a) => (a.intent ? fmt.num(a.intent.units, 0) : '—') },
-      { label: 'Safety check', render: (a) => (a.risk ? (a.risk.approved ? badge('passed', 'pos') : badge('refused', 'neg')) : badge('n/a')) },
-      { label: 'Result', render: (a) => badge(a.order_result?.status || '—', a.order_result?.status === 'filled' ? 'pos' : '') },
-    ], rows, { empty: 'No orders yet. When a check decides to buy or sell, the order and its safety check appear here.', onRow: (a) => detail.replaceChildren(auditDetail(a)), maxHeight: '420px' }));
-  }
-  render(ctx.state);
-  return { el };
+// What happened to an order, in one word plus a sentence. Derived only from the recorded audit row.
+const ORDER_STATUS = {
+  pending: ['Waiting at broker', 'info', 'Sent to the broker; waiting for it to fill. “Check status with broker” asks again.'],
+  partially_filled: ['Partly filled', 'info', 'Some of it filled; the rest is still open at the broker.'],
+  filled: ['Filled', 'pos', 'The broker filled it.'],
+  refused: ['Refused by safety check', 'warn', 'The safety check stopped it before anything was sent.'],
+  not_sent: ['Not sent (orders off)', '', 'It passed the safety check, but orders are switched off, so it was only recorded.'],
+  rejected: ['Rejected by broker', 'neg', 'The broker refused it.'],
+  error: ['Failed: status unknown', 'neg', 'The request failed (e.g. network). It may or may not have reached the broker; it is never re-sent automatically.'],
+  cancelled: ['Cancelled', '', 'The broker cancelled or expired it.'],
+  closed: ['Position closed', '', 'An exit closed the position.'],
+};
+function orderStatus(a) {
+  const s = a.order_result?.status;
+  const key = a.risk && !a.risk.approved ? 'refused' : ORDER_STATUS[s] ? s : 'error';
+  const [label, tone, hint] = ORDER_STATUS[key];
+  return { key, label, tone, hint };
+}
+const isOrder = (a) => a.mode !== 'manual' && a.mode !== 'emergency';
+function orderBadge(a) {
+  const st = orderStatus(a);
+  return h('span', { class: `badge ${st.tone}` }, st.key === 'pending' || st.key === 'partially_filled' ? h('span', { class: 'spin sm' }) : null, st.label);
+}
+function orderLine(a) {
+  const i = a.intent;
+  if (!i) return a.decision?.action === 'exit' ? 'Exit: close the position' : a.idempotency_key;
+  return `${i.direction === 1 ? 'Buy' : 'Sell'} ${fmt.num(i.units, 0)} ${i.instrument} at about ${fmt.num(i.entry_price)}, stop ${i.stop_price != null ? fmt.num(i.stop_price) : 'none'}`;
+}
+function orderWhy(a) {
+  if (a.risk && !a.risk.approved) return (a.risk.reasons || []).join('; ');
+  const r = a.order_result || {};
+  return r.message || (r.fill_price != null ? `filled at ${fmt.num(r.fill_price)}` : '');
 }
 
-function auditDetail(a) {
+export function execution(ctx) {
+  const el = h('div', { class: 'stack', style: { gap: '16px' } });
+  const liveSlot = h('div');
+  const summary = h('div');
+  const listSlot = h('div');
+  const detail = h('div');
+  let rows = [];
+  let sel = null;
+
+  function renderList() {
+    const orders = rows.filter(isOrder);
+    const counts = {};
+    for (const a of orders) { const k = orderStatus(a).key; counts[k] = (counts[k] || 0) + 1; }
+    const order = ['pending', 'partially_filled', 'filled', 'refused', 'not_sent', 'rejected', 'error', 'cancelled', 'closed'];
+    summary.replaceChildren(h('div', { class: 'ostrip' }, order.filter((k) => counts[k] || ['pending', 'filled', 'refused', 'error'].includes(k)).map((k) => {
+      const [label, tone] = ORDER_STATUS[k];
+      return h('div', { class: `ostat ${counts[k] ? tone : 'zero'}` }, h('div', { class: 'n' }, String(counts[k] || 0)), h('div', { class: 'l' }, label));
+    })));
+    if (!orders.length) {
+      const enabled = ctx.state.mode.execution_enabled;
+      listSlot.replaceChildren(h('div', { class: 'state' }, h('div', { class: 't' }, 'No orders yet'),
+        h('div', { class: 'small', style: { maxWidth: '560px' } }, 'An order appears here when a check decides to buy or sell. So far every check has decided not to trade (see “AI decisions”).',
+          enabled ? '' : ' Orders are also switched off, so even a buy signal would only be recorded here as “Not sent”.'),
+        h('div', { class: 'row', style: { justifyContent: 'center', marginTop: '6px' } },
+          h('button', { class: 'btn primary', dataset: { job: 'check' }, onclick: (e) => ctx.act('run-once', {}, { button: e.currentTarget }) }, icon('bolt'), 'Run a new check'),
+          h('a', { class: 'btn ghost', href: '#/agents' }, 'See past checks'))));
+      detail.replaceChildren(emptyState('Nothing to show', 'Order details appear here.'));
+      return;
+    }
+    listSlot.replaceChildren(table([
+      { label: 'Status', render: orderBadge },
+      { label: 'When', render: (a) => when(a.at) },
+      { label: 'Order', render: (a) => orderLine(a) },
+      { label: 'What happened', render: (a) => h('span', { class: 'small muted' }, orderWhy(a) || orderStatus(a).hint) },
+    ], orders, { onRow: (a) => { sel = a.id; renderList(); }, selected: (a) => a.id === sel, maxHeight: '460px' }));
+    const a = orders.find((x) => x.id === sel) || orders[0];
+    sel = a.id;
+    detail.replaceChildren(orderDetail(a));
+  }
+
+  function renderLive(act) {
+    const run = act?.running.find((j) => j.kind === 'check' || j.kind === 'reconcile');
+    liveSlot.replaceChildren(run ? h('div', { class: 'note ai row', style: { gap: '10px' } }, h('span', { class: 'spin' }),
+      h('span', null, h('b', null, `${run.label}: `), `${run.steps.length > 1 ? `step ${run.steps.indexOf(run.step) + 1} of ${run.steps.length}, ` : ''}${run.step}. `,
+        'Any order it creates will appear below.')) : []);
+  }
+
+  function load() {
+    return api.get('/api/audit?limit=300').then((r) => { rows = r; renderList(); }, (e) => listSlot.replaceChildren(errorState(e, load)));
+  }
+
+  const st = ctx.state;
+  const b = st.broker;
+  const enabled = st.mode.execution_enabled;
+  el.append(
+    liveSlot,
+    panel('Orders', h('div', { class: 'stack', style: { gap: '14px' } }, summary, listSlot), {
+      meta: enabled ? 'paper orders on' : 'orders off: watching only',
+      tools: h('button', { class: 'btn sm', dataset: { job: 'reconcile' }, title: 'Ask the broker what happened to orders still waiting',
+        onclick: (e) => ctx.act('reconcile', {}, { button: e.currentTarget }).then(load) }, icon('refresh'), 'Check status with broker'),
+    }),
+    h('div', { class: 'grid' },
+      h('div', { class: 'c7' }, panel('Selected order', detail)),
+      h('div', { class: 'c5' }, h('div', { class: 'stack', style: { gap: '16px' } },
+        panel('Account', kv([['Account', b.available ? `${b.broker} paper ${b.account}` : 'not connected'], ['Order mode', enabled ? 'Paper orders on (passed strategies only)' : 'Watching only: nothing is sent'],
+          ['Open positions', (b.positions || []).length ? b.positions.map((p) => `${p.instrument} ${fmt.signed(p.units, 0)} @ ${fmt.num(p.avg_price)}`).join(', ') : 'none'],
+          ['Waiting at broker', b.open_orders ? String(b.open_orders.length) : 'not available']]),
+        { foot: 'Change the order mode in config/local.yaml (execution.enabled) and restart. Real-money trading is not possible in this app.' }),
+        panel('Emergency stop', h('div', { class: 'stack' },
+          h('div', { class: 'row' }, st.kill_switch.engaged ? badge('on: new orders blocked', 'neg') : badge('off', 'pos'),
+            st.kill_switch.engaged ? h('span', { class: 'small muted' }, `${killReason(st.kill_switch.reason)} · `, when(st.kill_switch.at)) : null),
+          h('div', null, killButton(ctx, st.kill_switch.engaged)),
+          h('div', { class: 'small muted' }, 'Blocks new orders only. It doesn\'t sell what you hold or cancel orders already at the broker.')))))));
+  listSlot.replaceChildren(loading(4));
+  load();
+  renderLive(st.activity);
+  return { el, onActivity: (act) => { const was = !!liveSlot.childNodes.length; renderLive(act); if (was && !liveSlot.childNodes.length) load(); } };
+}
+
+// The life of one order, step by step, from what was recorded.
+function orderDetail(a) {
   const i = a.intent || {};
+  const st = orderStatus(a);
+  const res = a.order_result || {};
+  const step = (state, title, body) => h('li', { class: state }, h('i', { 'aria-hidden': 'true' }), h('div', null, h('b', null, title), body ? h('div', { class: 'small muted' }, body) : null));
+  const refused = st.key === 'refused';
+  const sent = ['pending', 'partially_filled', 'filled', 'rejected', 'cancelled', 'error'].includes(st.key);
+  const brokerState = { filled: 'done', partially_filled: 'live', pending: 'live', rejected: 'bad', cancelled: 'skip', error: 'bad' }[st.key] || 'skip';
   return h('div', { class: 'stack' },
-    kv([['Key', h('span', { class: 'mono small' }, a.idempotency_key)], ['Time', when(a.at)], ['Mode', a.mode], ['Strategy', i.strategy],
-      ['Order', i.instrument ? `${i.direction === 1 ? 'BUY' : 'SELL'} ${i.units} ${i.instrument} @ ~${fmt.num(i.entry_price)} market` : null],
-      ['Stop', i.stop_price != null ? fmt.num(i.stop_price) : null], ['Risk amount', a.risk?.risk_amount != null ? fmt.num(a.risk.risk_amount) : null],
-      ['Result', a.order_result ? `${a.order_result.status}${a.order_result.message ? ': ' + a.order_result.message : ''}` : null],
-      ['Fill', a.order_result?.fill_price != null ? fmt.num(a.order_result.fill_price) : null]]),
-    a.risk ? h('div', null, h('div', { class: 'small muted' }, 'Risk checks'), table([{ label: 'Check', key: 'k' }, { label: '', render: (r) => (r.v ? badge('pass', 'pos') : badge('fail', 'neg')) }],
-      Object.entries(a.risk.checks || {}).map(([k, v]) => ({ k, v })))) : null,
-    a.risk?.reasons?.length ? h('div', { class: 'note neg small' }, a.risk.reasons.join('\n')) : null,
-    h('div', { class: 'small dim' }, 'Slippage, fees and latency are not recorded per order yet.'));
+    h('div', { class: 'row' }, orderBadge(a), h('span', { class: 'small muted' }, st.hint)),
+    h('ol', { class: 'jsteps big' },
+      step('done', 'The AI decided to trade', `${orderLine(a)} · ${i.strategy || ''} · ${fmt.time(a.at)}`),
+      step(refused ? 'bad' : 'done', refused ? 'Safety check refused it' : 'Safety check passed', refused ? (a.risk.reasons || []).join('; ') : a.risk?.risk_amount != null ? `money at risk if the stop is hit: ${fmt.num(a.risk.risk_amount)}` : ''),
+      step(refused ? 'skip' : sent ? 'done' : 'skip', sent ? 'Sent to the broker' : 'Not sent', sent ? `order key ${a.idempotency_key}` : refused ? 'stopped by the safety check' : 'orders are switched off'),
+      step(sent ? brokerState : 'skip', { filled: 'Filled', partially_filled: 'Partly filled', pending: 'Waiting for the broker', rejected: 'Rejected by the broker', cancelled: 'Cancelled', error: 'No answer (request failed)' }[st.key] || 'Broker',
+        sent ? [res.fill_price != null ? `fill price ${fmt.num(res.fill_price)}` : '', res.filled_units ? ` · ${fmt.num(res.filled_units, 0)} filled` : '', res.message ? ` · ${res.message}` : '',
+          res.checked_at ? ` · checked ${fmt.ago(res.checked_at)}` : ''].join('') : '')),
+    a.risk ? h('details', null, h('summary', { class: 'small' }, `All ${Object.keys(a.risk.checks || {}).length} safety checks`),
+      h('div', { class: 'row', style: { gap: '6px', marginTop: '8px' } }, Object.entries(a.risk.checks || {}).map(([k, v]) => badge(k.replace(/_/g, ' '), v ? 'pos' : 'neg')))) : null);
 }
 
 // ============================================================ Agents
@@ -479,7 +592,7 @@ export function agents(ctx) {
       'The strategy rule gives a signal, three agents review it, a coordinator decides, then the safety check runs. ',
       'They are fixed rules that run once per check (not chatbots), so there is nothing to start or pause.'),
     h('div', { class: 'row' },
-      h('button', { class: 'btn primary', onclick: (e) => ctx.act('run-once', {}, { button: e.currentTarget }) }, icon('bolt'), 'Run a new check'),
+      h('button', { class: 'btn primary', dataset: { job: 'check' }, onclick: (e) => ctx.act('run-once', {}, { button: e.currentTarget }) }, icon('bolt'), 'Run a new check'),
       killButton(ctx, ctx.state.kill_switch.engaged)),
     h('div', { class: 'grid' },
       h('div', { class: 'c7' }, panel('How a check flows', graphSlot, { meta: 'click a step for details' })),
@@ -644,8 +757,8 @@ export function research(ctx) {
       h('div', { class: 'c5' }, panel('Test details', detSlot))),
     panel('Test a strategy', h('div', { class: 'stack' },
       h('div', { class: 'row' }, strategySel,
-        h('button', { class: 'btn', onclick: () => run('backtest') }, 'Quick backtest (first look)'),
-        h('button', { class: 'btn primary', onclick: () => run('research') }, 'Full history test'),
+        h('button', { class: 'btn', dataset: { job: 'backtest' }, onclick: (e) => run('backtest', e.currentTarget) }, 'Quick backtest (first look)'),
+        h('button', { class: 'btn primary', dataset: { job: 'research' }, onclick: (e) => run('research', e.currentTarget) }, 'Full history test'),
         h('span', { class: 'small muted' }, `Uses all stored ${ctx.state.market.instrument} prices and realistic trading costs.`)),
       runSlot)),
     panel('Paper results vs history tests', emptyState('No paper trades yet', 'Once paper orders have filled, their results are compared with the history tests here.')));
@@ -710,11 +823,11 @@ export function research(ctx) {
   }
 
   let gone = false;
-  async function run(kind) {
+  async function run(kind, button) {
     const name = strategySel.value;
     runChart?.destroy(); runChart = null;
     runSlot.replaceChildren(h('div', { class: 'row muted' }, h('span', { class: 'typing' }, h('span'), h('span'), h('span')), kind === 'research' ? 'Running walk-forward research…' : 'Running backtest…'));
-    const res = await ctx.act(kind, { strategy: name });
+    const res = await ctx.act(kind, { strategy: name }, { button });
     if (gone) return;  // you left the page while it ran; the toast already showed the result
     if (!res) return runSlot.replaceChildren();
     if (!res.ok) return runSlot.replaceChildren(errorState(res.error));
@@ -753,7 +866,7 @@ export function news(ctx) {
         { label: 'Title', render: (x) => (safeUrl(x.url) ? h('a', { href: safeUrl(x.url), target: '_blank', rel: 'noopener noreferrer' }, x.title) : x.title) }],
       n.news, { empty: 'No headlines stored yet.', maxHeight: '360px' })), { meta: 'from outside sources' }))))));
   const el = h('div', { class: 'stack', style: { gap: '12px' } },
-    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => ctx.act('news-ingest').then(load) }, icon('refresh'), 'Refresh news & calendar'),
+    h('div', { class: 'row' }, h('button', { class: 'btn', dataset: { job: 'news' }, onclick: (e) => ctx.act('news-ingest', {}, { button: e.currentTarget }).then(load) }, icon('refresh'), 'Refresh news & calendar'),
       h('label', { class: 'check' }, allBox, 'Show every country'),
       h('span', { class: 'small muted' }, 'From central-bank news feeds and the Forex Factory calendar (this week only).')), slot);
   load();
@@ -764,7 +877,7 @@ export function news(ctx) {
 export function activity(ctx) {
   const slot = h('div');
   const q = h('input', { class: 'input', placeholder: 'Filter…', value: ctx.params.q || '', 'aria-label': 'Filter activity', oninput: () => render() });
-  const typeSel = h('select', { class: 'input', 'aria-label': 'Type', onchange: () => render() }, ['all', 'decision', 'order', 'log'].map((t) => h('option', { value: t }, t)));
+  const typeSel = h('select', { class: 'input', 'aria-label': 'Type', onchange: () => render() }, ['all', 'task', 'decision', 'order', 'log'].map((t) => h('option', { value: t }, t)));
   const levelSel = h('select', { class: 'input', 'aria-label': 'Log level', onchange: () => render() }, ['any level', 'ERROR', 'WARNING', 'INFO'].map((t) => h('option', { value: t }, t)));
   let rows = [];
   let open = null;
@@ -772,8 +885,10 @@ export function activity(ctx) {
     h('button', { class: 'btn sm', onclick: () => load() }, icon('refresh'), 'Reload')), panel('Everything that happened', flush(slot), { meta: 'checks, orders and system logs · newest first' }));
 
   function load() {
-    loadInto(slot, (sg) => Promise.all([api.get('/api/decisions?limit=200', sg), api.get('/api/audit?limit=300', sg), api.get('/api/logs?limit=400', sg)]), ([ds, au, lg]) => {
+    loadInto(slot, (sg) => Promise.all([api.get('/api/decisions?limit=200', sg), api.get('/api/audit?limit=300', sg), api.get('/api/logs?limit=400', sg), api.get('/api/jobs?limit=200', sg)]), ([ds, au, lg, jobs]) => {
       rows = [
+        ...jobs.map((j) => ({ at: j.started_at, type: 'task', level: j.state === 'succeeded' ? 'INFO' : j.state === 'running' ? 'RUNNING' : 'ERROR',
+          text: `${j.label}: ${j.state === 'running' ? stepLine(j) : (j.state === 'succeeded' ? '' : 'FAILED, ') + jobOutcome(j)} (${Math.round(j.elapsed_s)} s)`, raw: j })),
         ...ds.map((d) => ({ at: d.decided_at, type: 'decision', level: 'INFO', text: decisionText(d), raw: d })),
         ...au.map((a) => ({ at: a.at, type: 'order', level: a.risk && !a.risk.approved ? 'WARNING' : 'INFO', text: `${a.order_result?.status || '—'} · ${a.idempotency_key}${a.risk && !a.risk.approved ? ' · ' + (a.risk.reasons || []).join('; ') : ''}`, raw: a })),
         ...lg.lines.map((l) => ({ at: l.ts, type: 'log', level: l.level, text: `${l.logger || ''} ${l.msg}`, raw: l })),
@@ -786,7 +901,7 @@ export function activity(ctx) {
     const ty = typeSel.value; const lv = levelSel.value;
     const shown = rows.filter((r) => (ty === 'all' || r.type === ty) && (lv === 'any level' || r.level === lv) && (!t || r.text.toLowerCase().includes(t))).slice(0, 400);
     return h('div', null, table([
-      { label: 'Time', render: (r) => when(r.at) }, { label: 'Type', render: (r) => badge(r.type, r.type === 'decision' ? 'ai' : r.type === 'order' ? 'info' : '') },
+      { label: 'Time', render: (r) => when(r.at) }, { label: 'Type', render: (r) => badge(r.type, r.type === 'decision' ? 'ai' : r.type === 'order' ? 'info' : r.type === 'task' ? 'pos' : '') },
       { label: 'Level', render: (r) => badge(r.level, r.level === 'ERROR' ? 'neg' : r.level === 'WARNING' ? 'warn' : '') },
       { label: 'Event', render: (r) => h('div', null, r.text, open === r ? pre(r.raw) : null) },
     ], shown, { empty: 'Nothing matches.', onRow: (r) => { open = open === r ? null : r; render(); } }),

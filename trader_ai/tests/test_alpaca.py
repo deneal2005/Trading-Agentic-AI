@@ -49,7 +49,20 @@ class FakeSession:
 
 
 def broker(routes):
-    return AlpacaPaperBroker("k", "s", session=FakeSession(routes))
+    return AlpacaPaperBroker("k", "s", session=FakeSession(routes), quote_pause=0)
+
+
+def iex(bp, ap):
+    return Resp({"quote": {"bp": bp, "ap": ap, "t": "2026-10-29T13:36:00Z"}})
+
+
+def test_quote_uses_tightest_valid_snapshot():
+    # the sequence seen live on SPY right after the open
+    b = broker({("GET", "/quotes/latest"): [iex(767.0, 767.73), iex(767.78, 767.81), iex(767.8, 767.88)]})
+    q = b.quote("SPY")
+    assert (q.bid, q.ask) == (767.78, 767.81)
+    with pytest.raises(BrokerError):  # zero/crossed books only -> no quote, so no order
+        broker({("GET", "/quotes/latest"): [iex(0, 767.8), iex(768.0, 767.9), iex(0, 0)]}).quote("SPY")
 
 
 def test_requires_keys(monkeypatch):

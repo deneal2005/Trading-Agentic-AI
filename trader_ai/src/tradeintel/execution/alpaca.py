@@ -9,6 +9,7 @@ been exercised against a real paper account: run
 from __future__ import annotations
 
 import os
+import time
 
 import requests
 
@@ -21,7 +22,8 @@ DATA_URL = "https://data.alpaca.markets"
 
 class AlpacaPaperBroker(Broker):
     def __init__(self, key_id: str | None = None, secret: str | None = None, timeout: int = 15,
-                 session: requests.Session | None = None, feed: str = "iex"):
+                 session: requests.Session | None = None, feed: str = "iex", quote_samples: int = 3,
+                 quote_pause: float = 1.0):
         key_id = key_id or os.environ.get("APCA_API_KEY_ID", "")
         secret = secret or os.environ.get("APCA_API_SECRET_KEY", "")
         if not key_id or not secret:
@@ -30,6 +32,7 @@ class AlpacaPaperBroker(Broker):
         assert "paper-api" in self.base
         self.timeout = timeout
         self.feed = feed
+        self.quote_samples, self.quote_pause = quote_samples, quote_pause
         self.s = session or requests.Session()
         self.s.headers.update({"APCA-API-KEY-ID": key_id, "APCA-API-SECRET-KEY": secret})
 
@@ -49,8 +52,19 @@ class AlpacaPaperBroker(Broker):
         return AccountInfo(num, "practice", a["currency"], float(a["cash"]), float(a["equity"]))
 
     def quote(self, instrument):
-        q = self._req("GET", f"{DATA_URL}/v2/stocks/{instrument}/quotes/latest", params={"feed": self.feed})["quote"]
-        return Quote(instrument, float(q["bp"]), float(q["ap"]), parse_oanda_time(q["t"]))
+        # One IEX snapshot is noisy (seen: 3c, 73c, 8c within 4 s on SPY). The market-wide spread is never wider
+        # than any one exchange's, so the tightest of a few IEX snapshots is still an upper bound on the true spread.
+        best = None
+        for i in range(self.quote_samples):
+            if i:
+                time.sleep(self.quote_pause)
+            q = self._req("GET", f"{DATA_URL}/v2/stocks/{instrument}/quotes/latest", params={"feed": self.feed})["quote"]
+            bid, ask = float(q["bp"]), float(q["ap"])
+            if bid > 0 and ask >= bid and (best is None or ask - bid < best.ask - best.bid):
+                best = Quote(instrument, bid, ask, parse_oanda_time(q["t"]))
+        if best is None:
+            raise BrokerError(f"no valid {instrument} quote from Alpaca ({self.feed} feed)")
+        return best
 
     def positions(self):
         return [BrokerPosition(p["symbol"], abs(float(p["qty"])) * (1 if p["side"] == "long" else -1),

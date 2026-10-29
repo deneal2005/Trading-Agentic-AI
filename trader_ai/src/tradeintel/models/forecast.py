@@ -110,14 +110,14 @@ class ModelRegistry:
         d.mkdir(parents=True)
         with open(d / "model.pkl", "wb") as f:
             pickle.dump(model, f)
-        (d / "meta.json").write_text(json.dumps({**meta, "version": version, "features": FEATURES}, indent=2, default=str))
+        (d / "meta.json").write_text(json.dumps({**meta, "version": version, "features": FEATURES}, indent=2, default=str), encoding="utf-8")
         return version
 
     def versions(self, name: str) -> list[dict]:
         base = self.dir / name
         if not base.exists():
             return []
-        return [json.loads((v / "meta.json").read_text()) for v in sorted(base.iterdir()) if (v / "meta.json").exists()]
+        return [json.loads((v / "meta.json").read_text(encoding="utf-8")) for v in sorted(base.iterdir()) if (v / "meta.json").exists()]
 
     def load_latest_accepted(self, name: str):
         for meta in reversed(self.versions(name)):

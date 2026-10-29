@@ -20,7 +20,7 @@ MAX_FILE_BYTES = 200_000
 
 
 def load_sources(path: Path) -> list[dict]:
-    return yaml.safe_load(path.read_text())["sources"]
+    return yaml.safe_load(path.read_text(encoding="utf-8"))["sources"]
 
 
 def clone_or_update(url: str, dest: Path, timeout: int = 300) -> str:
@@ -41,7 +41,7 @@ def ingest_repo(kb: KnowledgeBase, root: Path, source: dict, version: str) -> in
         if f.stat().st_size > MAX_FILE_BYTES:
             continue
         try:
-            text = f.read_text(errors="replace")
+            text = f.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         kb.add_document(text, source=source["name"], license=source["license"], path=str(rel), version=version,
@@ -53,7 +53,7 @@ def ingest_repo(kb: KnowledgeBase, root: Path, source: dict, version: str) -> in
 def ingest_strategy_cards(kb: KnowledgeBase, cards_dir: Path) -> int:
     n = 0
     for f in sorted(cards_dir.glob("*.yaml")):
-        card = yaml.safe_load(f.read_text())
+        card = yaml.safe_load(f.read_text(encoding="utf-8"))
         lines = [f"# {card['name']}", f"Family: {card['family']}", f"Status: {card['status']}"]
         for key, val in card.items():
             if key in ("name", "family", "status", "evidence_level", "version"):
@@ -70,7 +70,7 @@ def ingest_strategy_cards(kb: KnowledgeBase, cards_dir: Path) -> int:
 def ingest_markdown_dir(kb: KnowledgeBase, d: Path, source: str = "local_concepts") -> int:
     n = 0
     for f in sorted(d.glob("*.md")):
-        text = f.read_text()
+        text = f.read_text(encoding="utf-8")
         level = "hypothesis"
         if text.startswith("---"):
             front = yaml.safe_load(text.split("---", 2)[1]) or {}

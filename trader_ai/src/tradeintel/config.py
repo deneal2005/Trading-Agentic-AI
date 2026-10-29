@@ -190,10 +190,10 @@ def load_settings(
 ) -> Settings:
     config_dir = config_dir or PROJECT_ROOT / "config"
     root = root or PROJECT_ROOT
-    raw = yaml.safe_load((config_dir / "default.yaml").read_text())
+    raw = yaml.safe_load((config_dir / "default.yaml").read_text(encoding="utf-8"))
     local = config_dir / "local.yaml"
     if local.exists():
-        raw = _deep_merge(raw, yaml.safe_load(local.read_text()) or {})
+        raw = _deep_merge(raw, yaml.safe_load(local.read_text(encoding="utf-8")) or {})
     raw = _deep_merge(raw, _env_overrides(dict(os.environ if env is None else env)))
     if overrides:
         raw = _deep_merge(raw, overrides)

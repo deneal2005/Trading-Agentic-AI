@@ -77,3 +77,15 @@ def test_model_on_random_walk_is_rejected(tmp_path, synth_bars):
     reg.save("m", model, {"verdict": ev.verdict})
     assert reg.load_latest_accepted("m") == (None, None)
     assert len(reg.versions("m")) == 1
+
+
+def test_single_instance_lock_blocks_second_holder(tmp_path):
+    import pytest
+    from tradeintel.service import single_instance
+
+    with single_instance(tmp_path / "cycle.lock"):
+        with pytest.raises(RuntimeError):
+            with single_instance(tmp_path / "cycle.lock"):
+                pass
+    with single_instance(tmp_path / "cycle.lock"):  # released after exit
+        pass

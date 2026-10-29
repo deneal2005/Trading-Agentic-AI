@@ -8,9 +8,15 @@ from tradeintel.config import load_settings
 from tradeintel.data.providers import SyntheticProvider
 
 
+# Most tests were written for EURUSD; pin it so they don't depend on the default market (SPY).
+FX = {"market": {"asset_class": "forex", "instrument": "EURUSD", "pip_size": 0.0001},
+      "costs": {"spread_pips": 1.2, "slippage_pips": 0.5, "financing_rate_annual": 0.01},
+      "risk": {"max_leverage": 5.0}}
+
+
 @pytest.fixture
 def settings(tmp_path):
-    return load_settings(env={}, root=tmp_path, overrides={"backtest": {"walkforward": {"train_bars": 300, "test_bars": 100}}})
+    return load_settings(env={}, root=tmp_path, overrides={**FX, "backtest": {"walkforward": {"train_bars": 300, "test_bars": 100}}})
 
 
 @pytest.fixture

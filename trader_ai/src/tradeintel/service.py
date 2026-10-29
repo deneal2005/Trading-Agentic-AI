@@ -74,10 +74,14 @@ class StateStore:
             con.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (k, json.dumps(v)))
 
 
-def make_broker(s: Settings) -> Broker:
-    if s.execution.broker == "oanda":
+def make_broker(s: Settings, name: str | None = None) -> Broker:
+    name = name or s.execution.broker
+    if name == "oanda":
         from .execution.oanda import OandaPracticeBroker
         return OandaPracticeBroker()
+    if name == "alpaca":
+        from .execution.alpaca import AlpacaPaperBroker
+        return AlpacaPaperBroker()
     return PaperBroker(s.paths.db_path, s.backtest.initial_equity, s.market.account_currency)
 
 

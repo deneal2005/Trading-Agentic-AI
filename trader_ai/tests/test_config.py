@@ -6,7 +6,7 @@ from tradeintel.config import load_settings
 
 def test_defaults_load(tmp_path):
     s = load_settings(env={}, root=tmp_path)
-    assert s.market.instrument == "EURUSD"
+    assert s.market.instrument == "SPY" and s.risk.max_leverage == 1.0
     assert s.execution.enabled is False
     assert s.paths.db_path.is_relative_to(tmp_path)
 

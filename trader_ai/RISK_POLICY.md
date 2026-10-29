@@ -44,4 +44,4 @@ After promotion, a single holdout test (`tradeintel holdout`) should confirm the
 These thresholds are deliberately modest placeholders, not evidence of profitability. They must be set from your risk budget before demo trading.
 
 ## Live trading
-Not supported. `execution.allow_live: true` fails config validation. The OANDA client is hard-wired to the practice host and refuses `OANDA_ENVIRONMENT != practice`. The pipeline raises `BrokerError` if a broker reports a live account. Enabling live trading would need code changes, review and a separate decision. It must never happen silently.
+Not supported. `execution.allow_live: true` fails config validation. The OANDA client is hard-wired to the practice host and refuses `OANDA_ENVIRONMENT != practice`. The Alpaca client is hard-wired to `paper-api.alpaca.markets` and refuses any account whose number lacks the paper `PA` prefix. For SPY the default `max_leverage` is 1.0 (no margin), and USD high-impact events trigger the blackout. The pipeline raises `BrokerError` if a broker reports a live account. Enabling live trading would need code changes, review and a separate decision. It must never happen silently.

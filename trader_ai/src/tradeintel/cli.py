@@ -8,7 +8,7 @@ import logging
 import sys
 from pathlib import Path
 
-from .config import PROJECT_ROOT, load_settings
+from .config import PROJECT_ROOT, load_dotenv, load_settings
 from .logging_setup import setup_logging
 
 log = logging.getLogger("tradeintel")
@@ -224,6 +224,27 @@ def cmd_dashboard(s, a):
     print(build_dashboard(s))
 
 
+def cmd_broker_check(s, a):
+    """Read-only: reads account, positions and a quote. Never submits, changes or cancels anything."""
+    from dataclasses import asdict
+    from datetime import datetime, timezone
+
+    from .execution.broker import BrokerError
+    from .service import make_broker
+
+    try:
+        b = make_broker(s, a.broker)
+        acct, pos, q = b.account(), b.positions(), b.quote(s.market.instrument)
+    except BrokerError as e:
+        sys.exit(f"broker check failed: {e}")
+    _print({"broker": a.broker or s.execution.broker, "environment": acct.environment,
+            "account": "..." + acct.account_id[-4:], "currency": acct.currency, "cash": acct.balance, "equity": acct.equity,
+            "positions": [asdict(p) for p in pos],
+            "quote": {"instrument": q.instrument, "bid": q.bid, "ask": q.ask, "spread": round(q.ask - q.bid, 6),
+                      "age_seconds": round((datetime.now(timezone.utc) - q.time).total_seconds())},
+            "execution_enabled": s.execution.enabled})
+
+
 def cmd_experiments(s, a):
     from .experiments.registry import Registry
     rows = Registry(s.paths.db_path).list(a.limit)
@@ -238,7 +259,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("data", help="market data").add_subparsers(dest="data_cmd", required=True)
     di = d.add_parser("ingest", help="fetch, validate and store bars")
-    di.add_argument("--provider", choices=["yahoo", "stooq", "csv", "synthetic"])
+    di.add_argument("--provider", choices=["yahoo", "stooq", "alpaca", "csv", "synthetic"])
     di.set_defaults(fn=cmd_data_ingest)
 
     def synth(sp):
@@ -279,6 +300,8 @@ def build_parser() -> argparse.ArgumentParser:
     sv = sub.add_parser("service", help="repeat decision cycles"); sv.add_argument("--interval", type=int, default=900)
     sv.set_defaults(fn=cmd_service)
     sub.add_parser("dashboard", help="write the status dashboard HTML").set_defaults(fn=cmd_dashboard)
+    bc = sub.add_parser("broker-check", help="read-only check of broker account, positions and quote")
+    bc.add_argument("--broker", choices=["paper", "oanda", "alpaca"]); bc.set_defaults(fn=cmd_broker_check)
     ex = sub.add_parser("experiments", help="list recorded experiments"); ex.add_argument("--limit", type=int, default=20)
     ex.set_defaults(fn=cmd_experiments)
     return p
@@ -286,6 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     a = build_parser().parse_args(argv)
+    load_dotenv(PROJECT_ROOT / ".env")
     s = load_settings(a.config_dir)
     setup_logging(s.paths.data_dir.parent / "logs", a.log_level)
     a.fn(s, a)

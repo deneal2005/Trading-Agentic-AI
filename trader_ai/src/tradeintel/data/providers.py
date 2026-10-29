@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 from abc import ABC, abstractmethod
 
 import numpy as np
@@ -65,6 +66,58 @@ class YahooProvider(Provider):
         )
         if timeframe == "1d":
             df.index = df.index.normalize()
+        adj = (res["indicators"].get("adjclose") or [{}])[0].get("adjclose")
+        if adj is not None:  # split/dividend-adjust OHLC (matters for ETFs; a no-op for FX where adjclose == close)
+            f = pd.Series(adj, index=df.index, dtype=float) / df["close"]
+            df[["open", "high", "low", "close"]] = df[["open", "high", "low", "close"]].mul(f, axis=0)
+        return df
+
+
+class AlpacaProvider(Provider):
+    """Alpaca market-data v2 stock bars, split- and dividend-adjusted.
+
+    Needs APCA_API_KEY_ID / APCA_API_SECRET_KEY (trader_ai/.env). The free
+    IEX feed only goes back to about 2016 and its volume is IEX-only.
+    """
+
+    source = "alpaca"
+    URL = "https://data.alpaca.markets/v2/stocks/{sym}/bars"
+    TF = {"1h": "1Hour", "4h": "4Hour", "1d": "1Day"}
+
+    def __init__(self, timeout: int = 20, session: requests.Session | None = None, feed: str = "iex"):
+        self.timeout = timeout
+        self.session = session or requests.Session()
+        self.feed = feed
+
+    def fetch(self, instrument, timeframe, start, end=None):
+        key, secret = os.environ.get("APCA_API_KEY_ID"), os.environ.get("APCA_API_SECRET_KEY")
+        if not key or not secret:
+            raise DataUnavailable("APCA_API_KEY_ID and APCA_API_SECRET_KEY must be set in trader_ai/.env")
+        params = {"timeframe": self.TF[timeframe], "start": pd.Timestamp(start, tz="UTC").isoformat(),
+                  "adjustment": "all", "feed": self.feed, "limit": 10000}
+        if end:
+            params["end"] = pd.Timestamp(end, tz="UTC").isoformat()
+        rows: list[dict] = []
+        try:
+            while True:
+                r = self.session.get(self.URL.format(sym=instrument), params=params, timeout=self.timeout,
+                                     headers={"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret})
+                r.raise_for_status()
+                body = r.json()
+                rows += body.get("bars") or []
+                if not body.get("next_page_token"):
+                    break
+                params["page_token"] = body["next_page_token"]
+        except Exception as e:  # network, HTTP, schema
+            raise DataUnavailable(f"alpaca fetch failed for {instrument}: {e}") from e
+        if not rows:
+            raise DataUnavailable(f"alpaca returned no bars for {instrument}")
+        df = pd.DataFrame(rows)
+        df.index = pd.to_datetime(df.pop("t"), utc=True)
+        df = df.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"})
+        df = df[["open", "high", "low", "close", "volume"]]
+        if timeframe == "1d":
+            df.index = df.index.normalize()  # Alpaca stamps daily bars at midnight New York time
         return df
 
 
@@ -154,6 +207,8 @@ def make_provider(name: str, csv_path: str | None = None, timeout: int = 20) -> 
         return YahooProvider(timeout)
     if name == "stooq":
         return StooqProvider(timeout)
+    if name == "alpaca":
+        return AlpacaProvider(timeout)
     if name == "csv":
         if not csv_path:
             raise ValueError("data.csv_path is required for the csv provider")

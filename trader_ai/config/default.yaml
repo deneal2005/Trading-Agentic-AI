@@ -10,28 +10,36 @@ paths:
   kill_switch_file: var/KILL_SWITCH
 
 market:
-  asset_class: forex
-  instrument: EURUSD
+  # Switched from EURUSD (forex) to SPY for the Alpaca paper account, which
+  # has no forex. For EURUSD use: asset_class forex, instrument EURUSD,
+  # pip_size 0.0001, spread 1.2 / slippage 0.5 pips, financing 0.01, start 2010-01-01.
+  asset_class: equity
+  instrument: SPY
   timeframe: 1d
   account_currency: USD
-  # Price units per pip for this instrument.
-  pip_size: 0.0001
+  # Price units per "pip". For stocks/ETFs one pip = one cent, so every
+  # *_pips value below is in cents.
+  pip_size: 0.01
 
 data:
-  # yahoo | stooq | csv | synthetic
+  # yahoo | stooq | alpaca | csv | synthetic
+  # Yahoo (split/dividend-adjusted) goes back to 1993 for SPY; the free Alpaca
+  # IEX feed only to about 2016, so Yahoo is the research default and Alpaca a cross-check.
   provider: yahoo
-  start: "2010-01-01"
+  start: "2000-01-01"
   csv_path: null
   # Bars older than this (in multiples of the timeframe) are treated as stale.
   max_staleness_bars: 3
 
 costs:
-  # Conservative retail-FX assumptions; see RESEARCH_SOURCES.md.
-  spread_pips: 1.2
-  slippage_pips: 0.5
+  # SPY: the quoted spread is usually 1 cent; 2 cents spread plus 2 cents
+  # slippage per side is deliberately pessimistic. Alpaca charges no commission.
+  spread_pips: 2.0
+  slippage_pips: 2.0
   commission_per_million: 0.0
-  # Annualised financing (swap) cost on notional held overnight, both sides.
-  financing_rate_annual: 0.01
+  # Annualised financing on notional held overnight. 0 for a cash long;
+  # shorts really pay a borrow fee, so short-side results are slightly optimistic.
+  financing_rate_annual: 0.0
 
 backtest:
   initial_equity: 10000.0
@@ -46,7 +54,7 @@ risk:
   max_open_risk: 0.015             # aggregate risk across open positions
   max_daily_loss: 0.02
   max_drawdown: 0.10               # from equity high-water mark
-  max_leverage: 5.0
+  max_leverage: 1.0                # no margin: positions never exceed equity
   max_position_units: 500000
   max_positions_per_instrument: 1
   max_correlated_exposure: 2       # positions sharing a currency, same direction
@@ -85,7 +93,7 @@ promotion:
 
 execution:
   enabled: false          # master switch for any order submission
-  broker: paper           # paper | oanda
+  broker: paper           # paper | oanda | alpaca (paper only)
   allow_live: false       # code refuses live regardless; kept for clarity
 
 live:

@@ -35,7 +35,7 @@
 
 | Decision | Choice | Why |
 |---|---|---|
-| Initial market | EURUSD daily (configurable) | Most liquid FX pair, low costs, ties directly to the Forex Factory calendar. Daily bars are available free and are less sensitive to execution latency |
+| Initial market | EURUSD daily, then SPY daily (configurable) | EURUSD first: the most liquid FX pair, tied to the Forex Factory calendar. Switched to SPY on 2026-10-29 because the demo account is Alpaca, which has no forex. SPY is the most liquid US ETF, commission-free on Alpaca, with free adjusted daily history back to 1993. USD events apply to it through the blackout |
 | Language / storage | Python 3.11+, SQLite (WAL), static HTML | Runs anywhere, with no services to operate. Easy to move to a VPS |
 | Backtester | Own bar-by-bar engine | Explicit, testable fill model (next-bar open, spread, slippage, gap-through stops, financing). Libraries such as vectorbt and backtrader hide fill assumptions or add heavy dependencies |
 | Validation | Rolling walk-forward plus an untouched 20% holdout, used once | Out-of-sample by construction. Holdout reuse is refused by the registry |
@@ -43,7 +43,7 @@
 | LLM role | Interpretation and explanation only | Fine-tuning is not justified until a measurable task and labelled dataset exist (see PROJECT_PLAN) |
 | Quant model | Regularised logistic regression vs naive baselines | Simple, fast and honest. More complex models must beat it first |
 | Multi-agent | Single-pass deterministic agents, abstain on objections | Avoids endless debates and invented consensus. Compared against the single-strategy baseline (`mode="single"`) |
-| Demo broker | OANDA v20 practice API | Free practice accounts, a REST API, FX-native. The live host is not reachable from the client class |
+| Demo broker | Alpaca paper (equities), OANDA v20 practice (FX) | Free demo accounts with REST APIs. Neither client class can reach a live host: the base URLs are fixed, and the account type is verified |
 
 ## Leakage controls
 - Indicators are causal. Tests assert that signals don't change when future bars are removed.

@@ -50,6 +50,32 @@ Market switched to SPY for the Alpaca paper account. Data: Yahoo SPY, 2000-01-03
 
 **Interpretation, in plain words:** 53.6% sounds better than a coin flip, but SPY goes up on about 55% of days. Simply always saying "up" scores 54.6%, which beats the model. Its probabilities aren't informative either. When it said ~35% chance of up, SPY rose 56% of the time, and when it said ~64%, SPY rose 53% of the time: its confident calls were slightly *worse* than average. So these 7 price-based features carry no usable next-day signal for SPY, which is consistent with E6–E11. A 1-point accuracy edge would also be far too small to survive costs.
 
+## E13, E15, E16: research-backed strategies on REAL SPY daily (2026-10-29)
+These are strategies with peer-reviewed evidence (cards with citations and counter-evidence are in `knowledge/strategies/`). All are long-only and 100% invested when in the market, so they compare fairly with buy-and-hold. Same data, costs and walk-forward as E11 (18 folds, OOS 2002-12 to 2021-06; holdout untouched). **E13 ran exactly as pre-registered:** SMA 200, `--no-optimize`.
+
+| Exp | Strategy (evidence) | Trials | OOS return | Sharpe (90% CI) | Max DD | Trades | 2x-cost return | Gate |
+|---|---|---|---|---|---|---|---|---|
+| E13 | sma_trend_filter, n=200 (Faber 2007) | 18 | +197% | 0.59 (0.15 … 0.96) | **24.2%** | 76 | +184% | rejected |
+| E15 | tsmom (Moskowitz, Ooi & Pedersen 2012) | 72 | +282% | **0.67** (0.28 … 1.06) | **18.7%** | 78 | +265% | rejected |
+| E16 | turn_of_month (Ariel 1987; McConnell & Xu 2008) | 54 | +47% | 0.33 (−0.15 … 0.66) | 23.7% | 216 | +31% | rejected |
+| — | buy_and_hold (baseline) | — | +444% | 0.60 | 55.2% | 18 | | |
+
+**Interpretation, in plain words:** this is the first time anything in this project behaved like its published evidence.
+- **Trend rules (E13, E15) matched buy-and-hold's risk-adjusted return** (Sharpe 0.59 and 0.67 vs 0.60) **with less than half the worst fall** (24% and 19% vs 55%). They were in the market about 80% of the time, so total return is lower. Both Sharpe confidence intervals are above zero, and both survive doubled costs.
+- **The gate still rejected them:** max drawdown is above the 15% placeholder, and neither beats buy-and-hold on *both* Sharpe and return. A long-only filter can't beat buy-and-hold's return in a bull market. I did **not** relax the gate after seeing these results, because that would be moving the goalposts. Whether a "same Sharpe, half the drawdown" profile is acceptable is a decision to make *before* touching the single-use holdout.
+- **TSMOM's Sharpe edge (0.67 vs 0.60) is within noise.** The intervals overlap almost completely, and 72 trials were run.
+- **Turn of month (E16) is weak.** Its interval includes zero, consistent with published anomalies decaying (McLean & Pontiff 2016).
+
+## E17, E18: direction models with research features on REAL SPY (2026-10-29)
+5 features derived from the strategies above were added to the 7 base features: 6- and 12-month momentum, distance to SMA 200, a volatility regime ratio and the turn-of-month flag. Walk-forward 750/250, 22 folds, 5,500 OOS predictions.
+
+| Exp | Model | Accuracy | Log loss | Always "up" (base rate) | Gate |
+|---|---|---|---|---|---|
+| E17 | Logistic regression, 12 features (v `20261029T143750`) | 52.4% | 0.7030 | **55.2% / 0.6895** | rejected |
+| E18 | Neural network 12→16→8→1, tanh, L2 1e-2, 360 parameters (v `20261029T143755`) | 51.9% | 0.7138 | **55.2% / 0.6895** | rejected |
+
+**Interpretation:** adding the research features made next-day prediction *worse* (E14 with 7 features: 53.6%). Momentum and trend work as slow rules held for months (E13/E15), not as next-day predictors. The neural network overfits the most: when it said 83% chance of up, SPY rose 51.5% of the time. Bigger models on the same information aren't the answer; a different prediction horizon or different information would be. The network is kept in the registry (rejected, not used by any agent) because the 3D brain view visualises its real weights.
+
 ## E1–E3: walk-forward baselines on synthetic EURUSD-like daily data (2026-10-29)
 Setup: 2010-01-01 to 2025-12-31 (4,174 business days), 20% holdout untouched, 750/250 walk-forward, 10 folds, parameters re-selected per fold from the grid, costs 1.2 pip spread + 0.5 pip slippage per side + 1% p.a. financing.
 

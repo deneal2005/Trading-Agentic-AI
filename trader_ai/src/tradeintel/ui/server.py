@@ -89,6 +89,8 @@ class App:
             return api.logs_view(s, max(1, min(int(one("limit", "200")), 2000)), one("level"))
         if path == "/api/config":
             return api.config_view(s)
+        if path == "/api/brain":
+            return api.brain_view(s, max(1, min(int(one("history", "120")), 1000)))
         raise KeyError(path)
 
     def post(self, path: str, body: dict):

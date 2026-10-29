@@ -34,7 +34,7 @@ tradeintel research sma_cross donchian_breakout rsi_mean_reversion
 | `tradeintel backtest <strategy> [--synthetic]` | One full-sample backtest. In-sample, for inspection only |
 | `tradeintel research <strategy...> [--synthetic]` | Walk-forward OOS test, baselines, 2x cost stress, regime breakdown, promotion gate, HTML report and registry entry |
 | `tradeintel holdout <strategy> --params '{...}'` | One-time test of fixed parameters on the untouched holdout. A second use is refused |
-| `tradeintel model-eval [--synthetic]` | Walk-forward direction model vs naive baselines. Versioned, and rejected unless it beats them |
+| `tradeintel model-eval [--model logit\|mlp] [--synthetic]` | Walk-forward direction model (logistic regression or a small neural network) vs naive baselines. Versioned, and rejected unless it beats them |
 | `tradeintel news ingest` | Central-bank RSS plus the Forex Factory weekly calendar, with dedup, revision tracking and source health |
 | `tradeintel news analyze` | Facts and interpretation for high-impact events (rules, with an optional LLM) |
 | `tradeintel news ablation <strategy> [--events-csv f]` | Same strategy and folds, with and without the news filter |
@@ -91,6 +91,7 @@ This opens `http://127.0.0.1:8765` in your browser. Stop it with Ctrl+C in the t
 | Overview | Account strip (broker), SPY chart with strategy signals and recorded decisions, agent status, watchlist, risk utilisation, alerts and events |
 | Markets | Candles, volume and SMA 50/200 from stored bars; signal and decision markers; position lines; live quote and data freshness; why the agent watches the symbol |
 | Execution | Environment, execution policy, positions and open orders (broker), kill switch, the full order audit with risk checks |
+| Neural Brain | Interactive 3D view of the trained neural network (`model-eval --model mlp`): its real 353 weights and its forward pass on each stored bar, with a day-by-day replay showing prediction vs what happened. It says plainly that the network is rejected and not used by the agents |
 | Agents | The real pipeline as a graph (4 rule-based agents, coordinator, risk engine, execution pipeline), each with its recorded outputs and diagnostics, plus an 11-step trace inspector per recorded decision |
 | Risk Center | Kill switch, limit utilisation, configured limits, event blackout, risk rejections |
 | Research | Strategies, the experiment registry with gate reasons and warnings, in-sample backtests vs buy-and-hold, walk-forward research runs |

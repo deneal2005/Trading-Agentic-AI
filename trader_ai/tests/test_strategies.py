@@ -29,6 +29,20 @@ def test_grid_respects_constraints():
         assert g["fast"] < g["slow"]
 
 
+def test_turn_of_month_holds_last_day_through_first_days():
+    from conftest import make_bars
+    bars = make_bars([100.0] * 45, start="2024-01-01", freq="B")  # Jan 1 .. Mar 1 business days
+    tgt = build("turn_of_month", days_after=3).signals(bars)["target"]
+    on = [d.strftime("%m-%d") for d in tgt[tgt == 1].index]
+    # signal on the last trading day and the first 2 of the month -> held days 1..3 after next-open fills
+    assert on == ["01-01", "01-02", "01-31", "02-01", "02-02", "02-29", "03-01"]
+
+
+def test_trend_filter_and_tsmom_are_long_or_flat(synth_bars):
+    for name in ("sma_trend_filter", "tsmom"):
+        assert set(build(name).signals(synth_bars)["target"].unique()) <= {0, 1}
+
+
 def test_unknown_param_rejected():
     with pytest.raises(ValueError):
         build("sma_cross", nonsense=1)

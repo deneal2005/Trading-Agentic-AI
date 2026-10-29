@@ -342,7 +342,8 @@ def agents_view(s: Settings) -> dict:
     from ..models.forecast import ModelRegistry
     from ..kb.store import KnowledgeBase
     try:
-        models = ModelRegistry(s.paths.models_dir).versions("direction_logit")
+        mr = ModelRegistry(s.paths.models_dir)
+        models = mr.versions("direction_logit") + mr.versions("direction_mlp")
     except Exception as e:
         models = [{"error": str(e)}]
     try:
@@ -465,6 +466,52 @@ def config_view(s: Settings) -> dict:
     return {"settings": s.model_dump(mode="json"),
             "env": {k: bool(os.environ.get(k)) for k in SECRET_ENV},
             "series": stored_series(s)}
+
+
+def brain_view(s: Settings, history: int = 120) -> dict:
+    """The trained neural network's real weights, plus its forward pass on the latest stored bars."""
+    import pickle
+
+    import numpy as np
+
+    from ..models.forecast import ModelRegistry, make_features
+
+    versions = ModelRegistry(s.paths.models_dir).versions("direction_mlp")
+    if not versions:
+        return {"available": False, "error": "No neural network trained yet. Run `tradeintel model-eval --model mlp`."}
+    meta = versions[-1]
+    with open(s.paths.models_dir / "direction_mlp" / meta["version"] / "model.pkl", "rb") as f:
+        pipe = pickle.load(f)  # our own artifact from ModelRegistry.save
+    scaler, mlp = pipe.steps[0][1], pipe.steps[-1][1]
+    feats = meta["features"]
+    bars, err = _bars(s)
+    if err or bars.empty:
+        return {"available": False, "error": err or "no stored bars"}
+    X = make_features(bars)[feats].dropna().iloc[-history:]
+    acts = [scaler.transform(X)]
+    for i, (W, b) in enumerate(zip(mlp.coefs_, mlp.intercepts_)):
+        z = acts[-1] @ W + b
+        acts.append(np.tanh(z) if i < len(mlp.coefs_) - 1 else 1 / (1 + np.exp(-z)))
+    # self-check: this forward pass must equal scikit-learn's own prediction
+    diff = float(np.max(np.abs(acts[-1][:, 0] - pipe.predict_proba(X)[:, 1])))
+    if diff > 1e-6:
+        raise ValueError(f"forward pass mismatch {diff}")
+    c = bars["close"]
+    actual = (c.shift(-1) > c).where(c.shift(-1).notna()).reindex(X.index)
+    hist = [{"time": t.isoformat(), "acts": [a[i].round(4).tolist() for a in acts], "p_up": round(float(acts[-1][i, 0]), 4),
+             "actual_up": None if pd.isna(actual.iloc[i]) else bool(actual.iloc[i])} for i, t in enumerate(X.index)]
+    return {"available": True, "version": meta["version"], "verdict": meta.get("verdict"), "reasons": meta.get("reasons", []),
+            "model": meta.get("model"), "baseline": (meta.get("baselines") or {}).get("base_rate"),
+            "n_predictions": meta.get("n_predictions"), "n_folds": meta.get("n_folds"), "data_source": meta.get("data_source"),
+            "instrument": s.market.instrument, "features": feats, "raw_latest": {k: _num(v) for k, v in X.iloc[-1].items()},
+            "layers": [len(feats), *[w.shape[1] for w in mlp.coefs_]],
+            "weights": [W.round(4).tolist() for W in mlp.coefs_],  # weights[l][from][to]
+            "biases": [b.round(4).tolist() for b in mlp.intercepts_],
+            "n_params": int(sum(W.size + b.size for W, b in zip(mlp.coefs_, mlp.intercepts_))),
+            "activation": mlp.activation, "history": hist, "forward_pass_check": diff,
+            "used_by_agents": False,
+            "note": "Weights are the final walk-forward fold's trained network. Activations are its real forward pass on each "
+                    "stored daily bar; they change when a new bar is ingested, not tick by tick."}
 
 
 # ---------------------------------------------------------------- actions

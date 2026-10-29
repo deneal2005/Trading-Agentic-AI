@@ -17,16 +17,23 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss, log_loss
+from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from ..strategies.indicators import atr, rsi, sma
 
-FEATURES = ["r1", "r5", "r20", "vol20", "rsi14", "dist_sma50", "atr_pct"]
+BASE_FEATURES = ["r1", "r5", "r20", "vol20", "rsi14", "dist_sma50", "atr_pct"]
+# from the research strategies (knowledge/strategies): 6/12-month momentum, 200-day trend,
+# volatility regime (Moreira & Muir), turn-of-month window
+RESEARCH_FEATURES = ["mom_126", "mom_252_21", "dist_sma200", "vol_ratio", "tom"]
+FEATURES = BASE_FEATURES + RESEARCH_FEATURES
 
 
 def make_features(bars: pd.DataFrame) -> pd.DataFrame:
     """Features at t use bars <= t. Label y_t = 1 if close[t+1] > close[t]."""
+    from ..strategies.library import TurnOfMonth
+
     c = bars["close"]
     lr = np.log(c).diff()
     X = pd.DataFrame(index=bars.index)
@@ -37,6 +44,11 @@ def make_features(bars: pd.DataFrame) -> pd.DataFrame:
     X["rsi14"] = rsi(c, 14) / 100
     X["dist_sma50"] = c / sma(c, 50) - 1
     X["atr_pct"] = atr(bars, 14) / c
+    X["mom_126"] = np.log(c).diff(126)
+    X["mom_252_21"] = np.log(c.shift(21) / c.shift(252))
+    X["dist_sma200"] = c / sma(c, 200) - 1
+    X["vol_ratio"] = X["vol20"] / lr.rolling(120).std()
+    X["tom"] = TurnOfMonth().signals(bars)["target"].astype(float)  # 1 = next bar is in the window
     X["y"] = (c.shift(-1) > c).astype(float).where(c.shift(-1).notna())
     return X
 
@@ -58,16 +70,30 @@ def _scores(y: np.ndarray, p: np.ndarray) -> dict:
             "brier": float(brier_score_loss(y, p))}
 
 
-def walk_forward_eval(bars: pd.DataFrame, train_bars: int = 750, test_bars: int = 250, C: float = 0.1) -> tuple[ModelEval, object]:
+MLP_LAYERS = (16, 8)
+
+
+def make_model(kind: str = "logit", C: float = 0.1):
+    if kind == "logit":
+        return make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=500))
+    if kind == "mlp":  # small tanh network, L2-regularised, early stopping on a split of the training window only
+        return make_pipeline(StandardScaler(), MLPClassifier(hidden_layer_sizes=MLP_LAYERS, activation="tanh", alpha=1e-2,
+                                                             max_iter=500, early_stopping=True, random_state=0))
+    raise ValueError(f"unknown model kind {kind}")
+
+
+def walk_forward_eval(bars: pd.DataFrame, train_bars: int = 750, test_bars: int = 250, C: float = 0.1,
+                      kind: str = "logit", features: list[str] | None = None) -> tuple[ModelEval, object]:
+    features = features or FEATURES
     X = make_features(bars).dropna()
     preds, ys, prior_p, persist_p = [], [], [], []
     start, folds, model = 0, 0, None
     while start + train_bars + test_bars <= len(X):
         tr = X.iloc[start:start + train_bars]
         te = X.iloc[start + train_bars:start + train_bars + test_bars]
-        model = make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=500))
-        model.fit(tr[FEATURES], tr["y"])
-        preds.append(model.predict_proba(te[FEATURES])[:, 1])
+        model = make_model(kind, C)
+        model.fit(tr[features], tr["y"])
+        preds.append(model.predict_proba(te[features])[:, 1])
         ys.append(te["y"].to_numpy())
         prior_p.append(np.full(len(te), tr["y"].mean()))                 # base rate from train
         persist_p.append(np.where(te["r1"] > 0, 0.55, 0.45))             # naive momentum
@@ -110,7 +136,7 @@ class ModelRegistry:
         d.mkdir(parents=True)
         with open(d / "model.pkl", "wb") as f:
             pickle.dump(model, f)
-        (d / "meta.json").write_text(json.dumps({**meta, "version": version, "features": FEATURES}, indent=2, default=str), encoding="utf-8")
+        (d / "meta.json").write_text(json.dumps({"features": FEATURES, **meta, "version": version}, indent=2, default=str), encoding="utf-8")
         return version
 
     def versions(self, name: str) -> list[dict]:

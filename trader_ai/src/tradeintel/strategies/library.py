@@ -122,8 +122,68 @@ class RSIMeanReversion(Strategy):
         return frame(bars.index, tgt, stop_dist=p["atr_mult"] * atr(bars, p["atr_n"]))
 
 
+# ---- research-backed, long-only, fully invested when in the market (fair vs buy-and-hold).
+# Evidence and caveats: knowledge/strategies/<name>.yaml.
+
+class SMATrendFilter(Strategy):
+    """Faber (2007) timing: hold the asset while it closes above its long moving average, else flat."""
+
+    name = "sma_trend_filter"
+    family = "trend_following"
+    requires_stop = False
+    defaults = {"n": 200}
+    param_grid = {"n": [150, 200, 250]}
+
+    def signals(self, bars):
+        c = bars["close"]
+        s = sma(c, self.params["n"])
+        return frame(bars.index, (c > s).astype(int).where(s.notna(), 0), size_frac=1.0)
+
+
+class TimeSeriesMomentum(Strategy):
+    """Moskowitz, Ooi & Pedersen (2012) on one asset: long while the trailing return
+    (lookback, skipping the most recent `skip` bars) is positive, else flat (or short)."""
+
+    name = "tsmom"
+    family = "trend_following"
+    requires_stop = False
+    defaults = {"lookback": 252, "skip": 21, "allow_short": False}
+    param_grid = {"lookback": [126, 252], "skip": [0, 21]}
+
+    def signals(self, bars):
+        p = self.params
+        c = bars["close"]
+        r = c.shift(p["skip"]) / c.shift(p["lookback"]) - 1
+        tgt = pd.Series(np.where(r > 0, 1, -1 if p["allow_short"] else 0), index=bars.index).where(r.notna(), 0)
+        return frame(bars.index, tgt, size_frac=1.0)
+
+
+class TurnOfMonth(Strategy):
+    """Ariel (1987); McConnell & Xu (2008): equity returns cluster around the turn of the month.
+    Signal on the month's last trading day, held through the first `days_after` trading days."""
+
+    name = "turn_of_month"
+    family = "calendar"
+    requires_stop = False
+    defaults = {"days_after": 3}
+    param_grid = {"days_after": [2, 3, 4]}
+
+    def signals(self, bars):
+        idx = bars.index
+        # calendar knowledge only (next business day is in a new month), not future data;
+        # shortcut: ignores exchange holidays, so a holiday-shifted month end can be off by a day
+        last_day = (idx + pd.offsets.BDay(1)).month != idx.month
+        day_no = pd.Series(1, index=idx).groupby([idx.year, idx.month]).cumsum()
+        tgt = (last_day | (day_no.to_numpy() < self.params["days_after"])).astype(int)
+        return frame(idx, tgt, size_frac=1.0)
+
+    def warmup(self):
+        return 25
+
+
 REGISTRY: dict[str, type[Strategy]] = {
-    c.name: c for c in [NoTrade, BuyAndHold, SMACross, DonchianBreakout, RSIMeanReversion]
+    c.name: c for c in [NoTrade, BuyAndHold, SMACross, DonchianBreakout, RSIMeanReversion,
+                        SMATrendFilter, TimeSeriesMomentum, TurnOfMonth]
 }
 
 

@@ -1,0 +1,28 @@
+name: sma_trend_filter
+family: trend_following
+version: 1
+status: research            # research | candidate | demo | retired
+evidence_level: research_finding
+hypothesis: >
+  Broad equity indices trend over months. Holding the index only while it trades
+  above a long moving average sidesteps part of large bear markets, at the cost
+  of whipsaws and of lagging re-entry.
+market_conditions: Long, persistent bear markets (2000-02, 2008). Hurts in V-shaped crashes and choppy sideways years.
+entry_rules: Long when the daily close is above SMA(n) (n = 150/200/250), filled at the next open. Long-only.
+exit_rules: Flat when the close falls below SMA(n), filled at the next open.
+data_and_indicators: [daily close, SMA(n)]
+stop_and_sizing: No stop; 100% of equity when long (same exposure as buy-and-hold), 0% when flat.
+holding_period: Months, with occasional whipsaw weeks.
+cost_assumptions: config costs (SPY - 2c spread + 2c slippage per side, no commission); cash earns nothing in the backtest.
+failure_modes:
+  - Whipsaws around the average in flat markets
+  - Misses the first part of fast rebounds
+  - Lower return than buy-and-hold in long bull markets; the case for it is smaller drawdowns, not higher returns
+evidence:
+  - "Faber (2007), A Quantitative Approach to Tactical Asset Allocation, Journal of Wealth Management 9(4). Uses a monthly 10-month SMA across asset classes."
+  - "Brock, Lakonishok & LeBaron (1992), Simple technical trading rules and the stochastic properties of stock returns, Journal of Finance 47(5)."
+  - "Counter-evidence: Sullivan, Timmermann & White (1999), Data-snooping, technical trading rule performance, and the bootstrap, Journal of Finance 54(5). Rule performance largely disappears out of sample after correcting for data snooping."
+  - "Caveat: this is a daily variant of a monthly rule; daily checks trade more often than the published version."
+backtest_results: See EXPERIMENTS.md (E13, pre-registered).
+disable_when:
+  - Out-of-sample Sharpe below buy-and-hold with no drawdown benefit over a full cycle

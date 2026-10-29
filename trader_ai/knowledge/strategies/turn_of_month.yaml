@@ -1,0 +1,27 @@
+name: turn_of_month
+family: calendar
+version: 1
+status: research
+evidence_level: empirical_observation
+hypothesis: >
+  US equity returns concentrate in the last trading day and first few trading days
+  of each month, plausibly from month-end cash flows (salaries, pension and fund flows).
+market_conditions: Any; a structural calendar effect rather than a trend or mean-reversion bet.
+entry_rules: Signal on the month's last trading day, filled at the next open (first trading day). Long-only.
+exit_rules: Flat after the first `days_after` trading days (2/3/4).
+data_and_indicators: [trading calendar only]
+stop_and_sizing: No stop; 100% of equity during the window, flat otherwise (~15-20% time in market).
+holding_period: 2-4 trading days per month.
+cost_assumptions: config costs; about 24 round trips a year, so costs matter more than for the trend rules.
+failure_modes:
+  - The effect may have weakened after publication
+  - Opening fills miss part of the last-day close-to-close return the studies measure
+  - Holiday-shifted month ends are approximated with business days
+evidence:
+  - "Ariel (1987), A monthly effect in stock returns, Journal of Financial Economics 18(1)."
+  - "Lakonishok & Smidt (1988), Are seasonal anomalies real? A ninety-year perspective, Review of Financial Studies 1(4)."
+  - "McConnell & Xu (2008), Equity returns at the turn of the month, Financial Analysts Journal 64(2)."
+  - "General caveat: McLean & Pontiff (2016), Does academic research destroy stock return predictability?, Journal of Finance 71(1). Published anomalies lose a large part of their returns after publication."
+backtest_results: See EXPERIMENTS.md (E16).
+disable_when:
+  - Out-of-sample excess return per day in the window not above the average day

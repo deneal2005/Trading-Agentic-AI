@@ -238,6 +238,19 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .graph .node { cursor: pointer; }
 .graph path { stroke: #3a424c; fill: none; stroke-width: 1.3; marker-end: url(#arrow); }
 
+/* 3D brain */
+.brain-stage {
+  position: relative; height: calc(100vh - 150px); min-height: 460px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+  background: radial-gradient(ellipse at 50% 42%, #15122b 0%, #0b0b14 45%, #07080a 100%);
+}
+.brain-stage canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.brain-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.brain-label { position: absolute; left: 0; top: 0; font: 11px var(--font); color: var(--text-2); white-space: nowrap; text-shadow: 0 1px 3px #000, 0 0 8px #000; }
+.brain-label.research { color: #c4bbff; }
+.brain-label.stem { color: var(--muted); }
+.brain-tip { position: absolute; z-index: 3; max-width: 280px; padding: 6px 9px; border-radius: 6px; background: rgba(22, 26, 31, .95); border: 1px solid var(--border-2); font-size: 12px; pointer-events: none; }
+.brain-slider { flex: 1; min-width: 160px; accent-color: var(--ai); }
+
 /* trace */
 .trace { list-style: none; margin: 0; padding: 0; }
 .trace li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; position: relative; padding-bottom: 12px; }

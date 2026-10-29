@@ -29,6 +29,8 @@ function killButton(ctx, engaged) {
 export { brain } from './brain.js';
 
 const LWC = window.LightweightCharts;
+// a chart may be destroyed by a page switch and again by a later reload; removing it twice throws
+const once = (fn) => { let done = false; return () => { if (!done) { done = true; fn(); } }; };
 const C = { bg: '#111418', grid: '#191d22', text: '#7d8590', border: '#22272e', pos: '#2ebd85', neg: '#f0565b', ai: '#8b7cf6', info: '#5aa9ff', warn: '#e8a13a', sma50: '#5aa9ff', sma200: '#c79bff' };
 const ACTION_TONE = { enter_long: 'pos', enter_short: 'neg', exit: 'warn', hold: '', abstain: 'ai' };
 const STANCE_TONE = { long: 'pos', short: 'neg', neutral: '', abstain: 'ai' };
@@ -87,7 +89,7 @@ function priceChart(el, d, show = {}) {
   setLegend(last);
   chart.subscribeCrosshairMove((p) => setLegend(p?.seriesData?.get(candles) || last));
   chart.timeScale().fitContent();
-  return { chart, destroy: () => chart.remove() };
+  return { chart, destroy: once(() => chart.remove()) };
 }
 
 function lineChart(el, series) {
@@ -95,7 +97,7 @@ function lineChart(el, series) {
   if (!chart) return { destroy() {} };
   for (const sr of series) chart.addLineSeries({ color: sr.color, lineWidth: sr.width || 1.5, priceLineVisible: false, title: sr.title }).setData(sr.data.filter((p) => p.value != null));
   chart.timeScale().fitContent();
-  return { chart, destroy: () => chart.remove() };
+  return { chart, destroy: once(() => chart.remove()) };
 }
 
 function head(title, sub, ...tools) {
@@ -707,11 +709,13 @@ export function research(ctx) {
       m.gate ? h('div', null, h('div', { class: 'small muted' }, 'Promotion gate'), (m.gate.reasons || []).length ? m.gate.reasons.map((x) => h('div', { class: 'small neg' }, '✕ ', x)) : h('div', { class: 'pos small' }, 'All checks passed')) : null));
   }
 
+  let gone = false;
   async function run(kind) {
     const name = strategySel.value;
     runChart?.destroy(); runChart = null;
     runSlot.replaceChildren(h('div', { class: 'row muted' }, h('span', { class: 'typing' }, h('span'), h('span'), h('span')), kind === 'research' ? 'Running walk-forward research…' : 'Running backtest…'));
     const res = await ctx.act(kind, { strategy: name });
+    if (gone) return;  // you left the page while it ran; the toast already showed the result
     if (!res) return runSlot.replaceChildren();
     if (!res.ok) return runSlot.replaceChildren(errorState(res.error));
     if (kind === 'research') { sel = res.experiment_id; load(); return runSlot.replaceChildren(h('div', { class: 'note' }, `Experiment #${res.experiment_id} recorded: ${res.gate.passed ? 'PASSED' : 'rejected'}. See the detail panel.`)); }
@@ -725,7 +729,7 @@ export function research(ctx) {
   }
 
   load();
-  return { el, destroy() { runChart?.destroy(); } };
+  return { el, destroy() { gone = true; runChart?.destroy(); } };
 }
 
 // ============================================================ News & events

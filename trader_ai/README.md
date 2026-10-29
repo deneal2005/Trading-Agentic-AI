@@ -13,13 +13,13 @@ cd trader_ai
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env            # optional: LLM / broker settings
-pytest                          # 88 tests, ~20 s
+pytest                          # 98 tests, ~20 s
 
 # Offline: everything works on clearly labelled SYNTHETIC data
 tradeintel research sma_cross donchian_breakout rsi_mean_reversion --synthetic
 open var/reports/research_sma_cross.html
 
-# Real data (needs internet): EURUSD daily from Yahoo, or --provider stooq / csv
+# Real data (needs internet): SPY daily from Yahoo, or --provider alpaca / stooq / csv
 tradeintel data ingest
 tradeintel research sma_cross donchian_breakout rsi_mean_reversion
 ```
@@ -28,7 +28,8 @@ tradeintel research sma_cross donchian_breakout rsi_mean_reversion
 
 | Command | What it does |
 |---|---|
-| `tradeintel data ingest [--provider yahoo\|stooq\|csv\|synthetic]` | Fetch, validate and store bars, with provenance |
+| `tradeintel data ingest [--provider yahoo\|stooq\|alpaca\|csv\|synthetic]` | Fetch, validate and store bars, with provenance |
+| `tradeintel broker-check [--broker paper\|oanda\|alpaca]` | Read-only: shows account, positions and a live quote. Never places, changes or cancels orders |
 | `tradeintel backtest <strategy> [--synthetic]` | One full-sample backtest. In-sample, for inspection only |
 | `tradeintel research <strategy...> [--synthetic]` | Walk-forward OOS test, baselines, 2x cost stress, regime breakdown, promotion gate, HTML report and registry entry |
 | `tradeintel holdout <strategy> --params '{...}'` | One-time test of fixed parameters on the untouched holdout. A second use is refused |
@@ -60,7 +61,16 @@ The system runs fully without an LLM, using rule-based analysis. To use one:
 LLM output is validated against a schema. It can't raise confidence above what the facts allow, and it never reaches the risk engine.
 
 ### Demo broker (later)
-Use an OANDA practice account: set `OANDA_API_TOKEN`, `OANDA_ACCOUNT_ID` and `OANDA_ENVIRONMENT=practice`, with `execution.broker: oanda`. Orders are sent only when all of these hold:
+**Alpaca paper (US stocks/ETFs, the default market SPY):**
+1. In the Alpaca dashboard, switch to **Paper Trading** and generate API keys.
+2. Open `trader_ai\.env` in Notepad (copy it from `.env.example` first if it doesn't exist) and fill in `APCA_API_KEY_ID=` and `APCA_API_SECRET_KEY=`. Never paste keys anywhere else.
+3. Run `tradeintel broker-check --broker alpaca`. It only reads. You should see `"environment": "practice"` and a SPY quote.
+
+The client talks only to `paper-api.alpaca.markets` and refuses any account whose number lacks the paper `PA` prefix.
+
+**OANDA practice (forex):** set `OANDA_API_TOKEN`, `OANDA_ACCOUNT_ID` and `OANDA_ENVIRONMENT=practice`, with `execution.broker: oanda`.
+
+For either broker, orders are sent only when all of these hold:
 - `execution.enabled: true`
 - the broker reports a non-live account
 - the kill switch is clear

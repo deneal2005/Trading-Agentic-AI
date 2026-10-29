@@ -45,7 +45,7 @@ class Market(BaseModel):
 
 
 class DataCfg(BaseModel):
-    provider: Literal["yahoo", "stooq", "csv", "synthetic"]
+    provider: Literal["yahoo", "stooq", "alpaca", "csv", "synthetic"]
     start: str
     csv_path: str | None = None
     max_staleness_bars: int = Field(default=3, ge=1)
@@ -125,7 +125,7 @@ class PromotionCfg(BaseModel):
 
 class ExecutionCfg(BaseModel):
     enabled: bool = False
-    broker: Literal["paper", "oanda"] = "paper"
+    broker: Literal["paper", "oanda", "alpaca"] = "paper"
     allow_live: bool = False
 
     @field_validator("allow_live")
@@ -180,6 +180,17 @@ def _env_overrides(env: dict[str, str]) -> dict[str, Any]:
     if "TRADEINTEL_LLM_PROVIDER" in env:
         out.setdefault("llm", {})["provider"] = env["TRADEINTEL_LLM_PROVIDER"]
     return out
+
+
+def load_dotenv(path: Path) -> None:
+    """Minimal KEY=VALUE reader for trader_ai/.env. Variables already set in the environment win."""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8-sig").splitlines():  # -sig: Notepad may add a BOM
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip("\"'"))
 
 
 def load_settings(

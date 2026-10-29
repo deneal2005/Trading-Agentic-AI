@@ -22,7 +22,7 @@ evidence:
   - "Hurst, Ooi & Pedersen (2017), A century of evidence on trend-following investing, Journal of Portfolio Management."
   - "Menkhoff, Sarno, Schmeling & Schrimpf (2012), Currency momentum strategies, Journal of Financial Economics 106(3)."
   - "Caveat: published evidence is mostly for diversified portfolios, not a single FX pair; single-instrument results are much noisier."
-backtest_results: See EXPERIMENTS.md (none on real data yet).
+backtest_results: See EXPERIMENTS.md (E6, real EURUSD daily, rejected).
 disable_when:
   - Rolling 12-month OOS Sharpe < 0 and drawdown > 1.5x backtest max drawdown
   - Live spread or slippage persistently > 2x assumptions

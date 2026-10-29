@@ -218,7 +218,9 @@ class RiskEngine:
 
         # 5) event risk
         window = timedelta(minutes=c.event_blackout_minutes)
-        blocking = [e for e in (events or []) if abs(e.time - m.now) <= window and set(e.currencies) & set(legs)]
+        # A single-leg instrument (stock/ETF) is priced in the account currency, so that currency's events apply.
+        affected = set(legs) if len(legs) > 1 else set(legs) | {a.account_currency}
+        blocking = [e for e in (events or []) if abs(e.time - m.now) <= window and set(e.currencies) & affected]
         check("event_blackout", not blocking, f"inside blackout for: {[e.title for e in blocking][:3]}")
 
         # 6) duplicate protection

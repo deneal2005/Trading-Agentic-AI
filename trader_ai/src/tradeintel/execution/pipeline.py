@@ -46,7 +46,9 @@ class ExecutionPipeline:
 
     def submitted_keys(self) -> set[str]:
         with connect(self.db) as con:
-            return {r[0] for r in con.execute("SELECT idempotency_key FROM audit WHERE order_result LIKE '%filled%'")}
+            # pending counts too: Alpaca accepts market orders and fills them asynchronously
+            return {r[0] for r in con.execute("SELECT idempotency_key FROM audit WHERE order_result LIKE '%filled%' "
+                                              "OR order_result LIKE '%\"pending\"%'")}
 
     def execute(self, intent: OrderIntent, decision: dict, day_start_equity: float, high_water_mark: float,
                 consecutive_losses: int, pip_size: float, events: list[EventWindow] | None = None) -> dict:

@@ -72,7 +72,7 @@ def test_run_cycle_without_data_abstains(settings):
 
 def test_model_on_random_walk_is_rejected(tmp_path, synth_bars):
     ev, model = walk_forward_eval(synth_bars, 300, 100)
-    assert ev.verdict == "rejected" and ev.n_folds == 8
+    assert ev.verdict == "rejected" and ev.n_folds == 6  # 252-bar momentum warmup leaves room for 6 folds
     reg = ModelRegistry(tmp_path)
     reg.save("m", model, {"verdict": ev.verdict})
     assert reg.load_latest_accepted("m") == (None, None)

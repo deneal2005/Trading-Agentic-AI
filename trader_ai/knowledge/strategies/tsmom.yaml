@@ -1,0 +1,25 @@
+name: tsmom
+family: trend_following
+version: 1
+status: research
+evidence_level: research_finding
+hypothesis: >
+  An asset's own past 6-12 month return predicts the sign of its next month's
+  return (time-series momentum), because investors under-react and then over-react.
+market_conditions: Sustained trends. Suffers at sharp trend reversals ("momentum crashes").
+entry_rules: Long when the return from t-lookback to t-skip is positive (lookback 126/252 bars, skip 0/21), at the next open. Long-only by default.
+exit_rules: Flat when that trailing return turns negative.
+data_and_indicators: [daily close]
+stop_and_sizing: No stop; 100% of equity when long. The published version volatility-scales positions, which the engine can't do yet.
+holding_period: Months.
+cost_assumptions: config costs.
+failure_modes:
+  - Reversal losses (e.g. 2009 rebound)
+  - The published edge comes from diversifying across ~50+ futures markets, not from one index
+evidence:
+  - "Moskowitz, Ooi & Pedersen (2012), Time series momentum, Journal of Financial Economics 104(2)."
+  - "Hurst, Ooi & Pedersen (2017), A century of evidence on trend-following investing, Journal of Portfolio Management 44(1)."
+  - "Counter-evidence: Huang, Li, Wang & Zhou (2020), Time series momentum: Is it there?, Journal of Financial Economics 135(3). Finds weak evidence of single-asset predictability."
+backtest_results: See EXPERIMENTS.md (E15).
+disable_when:
+  - Out-of-sample Sharpe below buy-and-hold with no drawdown benefit over a full cycle

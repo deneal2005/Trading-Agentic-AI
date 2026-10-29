@@ -189,6 +189,25 @@ def test_companion_llm_answer_is_labelled_and_given_facts(settings, app):
     assert seen["user"]["facts"]["broker"]["equity"] == 10000.0 and "question" in seen["user"]
 
 
+def test_brain_unavailable_without_a_trained_network(app, server):
+    body = json.loads(call(server, "GET", "/api/brain")[1])
+    assert body["available"] is False and "model-eval --model mlp" in body["error"]
+
+
+def test_brain_exposes_real_weights_and_verified_forward_pass(app, server, settings, synth_bars):
+    from tradeintel.models.forecast import FEATURES, ModelRegistry, walk_forward_eval
+    _, model = walk_forward_eval(synth_bars, 300, 100, kind="mlp")
+    ModelRegistry(settings.paths.models_dir).save("direction_mlp", model, {"verdict": "rejected", "reasons": ["test"]})
+    b = json.loads(call(server, "GET", "/api/brain?history=30")[1])
+    mlp = model.steps[-1][1]
+    assert b["available"] and b["layers"] == [len(FEATURES), 16, 8, 1] and b["used_by_agents"] is False
+    assert b["weights"][0][0][0] == round(float(mlp.coefs_[0][0][0]), 4)  # weights[layer][from][to] as trained
+    assert b["forward_pass_check"] <= 1e-6 and len(b["history"]) == 30
+    last = b["history"][-1]
+    assert last["actual_up"] is None and 0 <= last["p_up"] <= 1  # the newest bar's outcome isn't known yet
+    assert [len(a) for a in last["acts"]] == b["layers"]
+
+
 def test_companion_endpoint_round_trip(server):
     body = json.loads(post(server, "/api/companion", {"message": "Explain current positions", "context": {}})[1])
     assert body["source"] == "records" and re.search(r"No open positions", body["reply"])

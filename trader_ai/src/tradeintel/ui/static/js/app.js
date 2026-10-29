@@ -4,7 +4,7 @@ import * as pages from './pages.js';
 import { createCompanion } from './companion.js';
 
 const NAV = [
-  ['overview', 'Overview'], ['markets', 'Markets'], ['execution', 'Execution'], ['agents', 'Agents'],
+  ['overview', 'Overview'], ['markets', 'Markets'], ['execution', 'Execution'], ['agents', 'Agents'], ['brain', 'Neural Brain'],
   ['risk', 'Risk Center'], ['research', 'Research'], ['news', 'News & Events'], ['activity', 'Activity & Logs'], ['settings', 'Settings'],
 ];
 const POLL_MS = 10000;

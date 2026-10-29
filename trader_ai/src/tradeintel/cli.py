@@ -108,14 +108,19 @@ def cmd_model_eval(s, a):
     from .experiments.registry import Registry
     from .models.forecast import ModelRegistry, walk_forward_eval
 
+    from .models.forecast import FEATURES, MLP_LAYERS
+
     bars = _bars(s, a.synthetic)
-    ev, model = walk_forward_eval(bars, s.backtest.walkforward.train_bars, s.backtest.walkforward.test_bars)
-    meta = {**asdict(ev), "data_source": bars.attrs.get("source"), "data_hash": frame_hash(bars)}
+    ev, model = walk_forward_eval(bars, s.backtest.walkforward.train_bars, s.backtest.walkforward.test_bars, kind=a.model)
+    meta = {**asdict(ev), "data_source": bars.attrs.get("source"), "data_hash": frame_hash(bars), "kind": a.model,
+            "features": FEATURES, "instrument": s.market.instrument}
     if bars.attrs.get("source") == "SYNTHETIC":
         meta["verdict"] = "rejected"
         meta["reasons"] = meta["reasons"] + ["trained on SYNTHETIC data"]
-    version = ModelRegistry(s.paths.models_dir).save("direction_logit", model, meta)
-    Registry(s.paths.db_path).record("model", strategy="direction_logit", params={"C": 0.1}, instrument=s.market.instrument,
+    name = f"direction_{a.model}"
+    version = ModelRegistry(s.paths.models_dir).save(name, model, meta)
+    params = {"C": 0.1} if a.model == "logit" else {"hidden": list(MLP_LAYERS), "activation": "tanh", "alpha": 1e-2}
+    Registry(s.paths.db_path).record("model", strategy=name, params=params, instrument=s.market.instrument,
                                      timeframe=s.market.timeframe, data_source=meta["data_source"], data_hash=meta["data_hash"],
                                      config=s.model_dump(mode="json"), n_trials=1, metrics=meta, verdict=meta["verdict"])
     _print({"version": version, **meta})
@@ -292,6 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("strategy"); h.add_argument("--params", required=True); h.set_defaults(fn=cmd_holdout)
 
     me = sub.add_parser("model-eval", help="walk-forward evaluation of the direction model vs baselines")
+    me.add_argument("--model", choices=["logit", "mlp"], default="logit", help="logistic regression or small neural network")
     synth(me); me.set_defaults(fn=cmd_model_eval)
 
     n = sub.add_parser("news", help="news and economic calendar").add_subparsers(dest="news_cmd", required=True)

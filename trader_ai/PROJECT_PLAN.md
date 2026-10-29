@@ -25,6 +25,7 @@ Legend: ✅ done and tested · 🟡 partial · ⏳ planned · ⛔ blocked
 
 ## Known limitations
 - First real-data runs (E6–E8 EURUSD daily, E11 SPY daily): all three baseline strategies rejected on both. No edge after costs on EURUSD, and none beats buy-and-hold on SPY (see EXPERIMENTS.md).
+- Research strategies (E13, E15, E16): the engine sizes a position only at entry. So volatility targeting (Moreira & Muir) can't be tested as a strategy until rebalancing is added; it's used only as a model feature. Overnight-drift strategies need close fills, which the engine doesn't model.
 - Agents (found in the UI audit): the news analyst matches events by currency-pair letters, so for SPY it sees no events (the risk engine's USD blackout still applies). The quant analyst always abstains because the live cycle passes no model probability. Neither records durations or tool calls.
 - UI: no human-approval order queue, no order cancel or position close, no runtime risk editing (by policy), no voice, no desktop always-on-top window (it's a web app), no custom layouts. No scheduler heartbeat, so a running `service` can't be detected.
 - Equity costs assume no financing, so short positions don't pay a borrow fee in backtests. Positions aren't reconciled against Alpaca fills yet (orders return `pending`).

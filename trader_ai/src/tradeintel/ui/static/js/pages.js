@@ -2,6 +2,8 @@
 // the backend; anything unavailable is labelled as such.
 import { h, s, api, fmt, when, panel, flush, badge, table, kv, stat, meter, loadInto, emptyState, errorState, pre, icon, store } from './lib.js';
 
+export { brain } from './brain.js';
+
 const LWC = window.LightweightCharts;
 const C = { bg: '#111418', grid: '#191d22', text: '#7d8590', border: '#22272e', pos: '#2ebd85', neg: '#f0565b', ai: '#8b7cf6', info: '#5aa9ff', warn: '#e8a13a', sma50: '#5aa9ff', sma200: '#c79bff' };
 const ACTION_TONE = { enter_long: 'pos', enter_short: 'neg', exit: 'warn', hold: '', abstain: 'ai' };

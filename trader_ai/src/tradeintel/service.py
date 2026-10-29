@@ -5,7 +5,6 @@ on the same bar cannot submit twice."""
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import time
@@ -25,22 +24,37 @@ from .news.store import NewsStore
 from .risk.engine import EventWindow, KillSwitch, OrderIntent, RiskEngine
 from .strategies.library import build
 
+try:  # POSIX
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+    import msvcrt
+
 log = logging.getLogger(__name__)
 
 
 @contextmanager
 def single_instance(lock_path):
+    """Non-blocking exclusive lock so two cycles never run at once (POSIX and Windows)."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    f = open(lock_path, "w")
+    f = open(lock_path, "a+")
     try:
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+        if fcntl is not None:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        else:
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
         f.close()
         raise RuntimeError("another cycle is running")
     try:
         yield
     finally:
-        fcntl.flock(f, fcntl.LOCK_UN)
+        if fcntl is not None:
+            fcntl.flock(f, fcntl.LOCK_UN)
+        else:
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
         f.close()
 
 

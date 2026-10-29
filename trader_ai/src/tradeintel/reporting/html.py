@@ -107,5 +107,5 @@ def research_report(rep: dict, out: Path) -> Path:
             f"<p class='muted'>Metrics after spread, slippage, commission and financing. Past simulated performance does not "
             f"predict future results. Number of trials is reported because testing many variants inflates the best result.</p>")
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(page(f"Research report: {rep['strategy']}", mode, body))
+    out.write_text(page(f"Research report: {rep['strategy']}", mode, body), encoding="utf-8")
     return out

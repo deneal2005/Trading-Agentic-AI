@@ -98,14 +98,14 @@ class KillSwitch:
 
     def reason(self) -> str:
         try:
-            return json.loads(self.path.read_text()).get("reason", "unknown")
+            return json.loads(self.path.read_text(encoding="utf-8")).get("reason", "unknown")
         except Exception:
             return "kill switch file present"
 
     def engage(self, reason: str) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
-            self.path.write_text(json.dumps({"reason": reason, "at": datetime.now(timezone.utc).isoformat()}))
+            self.path.write_text(json.dumps({"reason": reason, "at": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
 
     def reset(self) -> None:
         if self.path.exists():

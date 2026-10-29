@@ -65,5 +65,5 @@ def build_dashboard(s: Settings, out: Path | None = None) -> Path:
             f"<h2>Experiments</h2>{table(exps)}")
     out = out or s.paths.reports_dir / "dashboard.html"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(page("TradeIntel dashboard", mode, body))
+    out.write_text(page("TradeIntel dashboard", mode, body), encoding="utf-8")
     return out

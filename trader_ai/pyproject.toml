@@ -27,6 +27,9 @@ tradeintel = "tradeintel.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+tradeintel = ["ui/static/*.html", "ui/static/css/*", "ui/static/js/*", "ui/static/vendor/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

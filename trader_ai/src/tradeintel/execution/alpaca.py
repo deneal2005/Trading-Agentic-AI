@@ -66,6 +66,21 @@ class AlpacaPaperBroker(Broker):
             raise BrokerError(f"no valid {instrument} quote from Alpaca ({self.feed} feed)")
         return best
 
+    def clock(self) -> dict:
+        """Read-only US market clock (is_open, next_open, next_close)."""
+        c = self._req("GET", f"{self.base}/v2/clock")
+        return {k: c.get(k) for k in ("is_open", "next_open", "next_close", "timestamp")}
+
+    def open_orders(self) -> list[dict]:
+        """Read-only list of open orders, stop legs included."""
+        keep = ("id", "client_order_id", "symbol", "side", "type", "qty", "filled_qty", "stop_price", "limit_price",
+                "status", "time_in_force", "order_class", "submitted_at")
+        out = []
+        for o in self._req("GET", f"{self.base}/v2/orders", params={"status": "open", "nested": "true"}) or []:
+            out.append({k: o.get(k) for k in keep})
+            out += [{k: leg.get(k) for k in keep} for leg in o.get("legs") or []]
+        return out
+
     def positions(self):
         return [BrokerPosition(p["symbol"], abs(float(p["qty"])) * (1 if p["side"] == "long" else -1),
                                float(p["avg_entry_price"]), None)

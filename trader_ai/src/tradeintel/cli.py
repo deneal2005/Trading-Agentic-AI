@@ -34,23 +34,30 @@ def _bars(s, synthetic: bool):
     return bars
 
 
-def cmd_data_ingest(s, a):
-    from .data.providers import DataUnavailable, make_provider
+def ingest(s, provider: str | None = None) -> dict:
+    """Fetch, validate and store bars. Raises DataUnavailable or ValueError on failure."""
+    from .data.providers import make_provider
     from .data.store import BarStore
     from .data.validate import validate_bars
 
     m = s.market
-    prov = make_provider(a.provider or s.data.provider, s.data.csv_path)
-    try:
-        raw = prov.fetch(m.instrument, m.timeframe, s.data.start)
-    except DataUnavailable as e:
-        sys.exit(f"data unavailable: {e}")
+    prov = make_provider(provider or s.data.provider, s.data.csv_path)
+    raw = prov.fetch(m.instrument, m.timeframe, s.data.start)
     bars, rep = validate_bars(raw, m.timeframe)
     if not rep.ok:
-        sys.exit(f"validation failed: {rep.issues}")
+        raise ValueError(f"validation failed: {rep.issues}")
     h = BarStore(s.paths.db_path).upsert(bars, m.instrument, m.timeframe, prov.source, rep.issues)
-    _print({"source": prov.source, "rows": rep.rows_out, "dropped": rep.dropped, "issues": rep.issues, "hash": h,
-            "first": str(bars.index[0]), "last": str(bars.index[-1])})
+    return {"source": prov.source, "rows": rep.rows_out, "dropped": rep.dropped, "issues": rep.issues, "hash": h,
+            "first": str(bars.index[0]), "last": str(bars.index[-1])}
+
+
+def cmd_data_ingest(s, a):
+    from .data.providers import DataUnavailable
+
+    try:
+        _print(ingest(s, a.provider))
+    except (DataUnavailable, ValueError) as e:
+        sys.exit(f"data ingest failed: {e}")
 
 
 def cmd_backtest(s, a):
@@ -115,6 +122,10 @@ def cmd_model_eval(s, a):
 
 
 def cmd_news_ingest(s, a):
+    _print(news_ingest(s))
+
+
+def news_ingest(s) -> dict:
     from .news.sources import ForexFactoryCalendar, RSSSource
     from .news.store import NewsStore
 
@@ -129,7 +140,7 @@ def cmd_news_ingest(s, a):
     ns.record_health(h)
     new, rev = ns.upsert_events(ev)
     out["forexfactory"] = {"ok": h.ok, "fetched": h.items, "new": new, "revised": rev, "error": h.error}
-    _print(out)
+    return out
 
 
 def cmd_news_analyze(s, a):
@@ -245,6 +256,11 @@ def cmd_broker_check(s, a):
             "execution_enabled": s.execution.enabled})
 
 
+def cmd_ui(s, a):
+    from .ui.server import serve
+    serve(s, a.port, not a.no_browser)
+
+
 def cmd_experiments(s, a):
     from .experiments.registry import Registry
     rows = Registry(s.paths.db_path).list(a.limit)
@@ -302,6 +318,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("dashboard", help="write the status dashboard HTML").set_defaults(fn=cmd_dashboard)
     bc = sub.add_parser("broker-check", help="read-only check of broker account, positions and quote")
     bc.add_argument("--broker", choices=["paper", "oanda", "alpaca"]); bc.set_defaults(fn=cmd_broker_check)
+    ui = sub.add_parser("ui", help="open the Trading OS dashboard and companion (local web app)")
+    ui.add_argument("--port", type=int, default=8765); ui.add_argument("--no-browser", action="store_true")
+    ui.set_defaults(fn=cmd_ui)
     ex = sub.add_parser("experiments", help="list recorded experiments"); ex.add_argument("--limit", type=int, default=20)
     ex.set_defaults(fn=cmd_experiments)
     return p

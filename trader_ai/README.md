@@ -30,6 +30,7 @@ tradeintel research sma_cross donchian_breakout rsi_mean_reversion
 |---|---|
 | `tradeintel data ingest [--provider yahoo\|stooq\|alpaca\|csv\|synthetic]` | Fetch, validate and store bars, with provenance |
 | `tradeintel broker-check [--broker paper\|oanda\|alpaca]` | Read-only: shows account, positions and a live quote. Never places, changes or cancels orders |
+| `tradeintel ui [--port 8765] [--no-browser]` | Opens the Trading OS: local dashboard and AI companion in your browser (see below) |
 | `tradeintel backtest <strategy> [--synthetic]` | One full-sample backtest. In-sample, for inspection only |
 | `tradeintel research <strategy...> [--synthetic]` | Walk-forward OOS test, baselines, 2x cost stress, regime breakdown, promotion gate, HTML report and registry entry |
 | `tradeintel holdout <strategy> --params '{...}'` | One-time test of fixed parameters on the untouched holdout. A second use is refused |
@@ -76,6 +77,28 @@ For either broker, orders are sent only when all of these hold:
 - the kill switch is clear
 - the strategy has a `promotable` verdict on real data
 - the risk engine approves the order
+
+## Trading OS (dashboard + companion)
+
+```
+tradeintel ui
+```
+
+This opens `http://127.0.0.1:8765` in your browser. Stop it with Ctrl+C in the terminal. It's a local web app served by the Python package, with no Node or build step. It shows only real data from the database, config and broker; anything unavailable is labelled as such.
+
+| Screen | What it shows (source) |
+|---|---|
+| Overview | Account strip (broker), SPY chart with strategy signals and recorded decisions, agent status, watchlist, risk utilisation, alerts and events |
+| Markets | Candles, volume and SMA 50/200 from stored bars; signal and decision markers; position lines; live quote and data freshness; why the agent watches the symbol |
+| Execution | Environment, execution policy, positions and open orders (broker), kill switch, the full order audit with risk checks |
+| Agents | The real pipeline as a graph (4 rule-based agents, coordinator, risk engine, execution pipeline), each with its recorded outputs and diagnostics, plus an 11-step trace inspector per recorded decision |
+| Risk Center | Kill switch, limit utilisation, configured limits, event blackout, risk rejections |
+| Research | Strategies, the experiment registry with gate reasons and warnings, in-sample backtests vs buy-and-hold, walk-forward research runs |
+| News & Events, Activity & Logs, Settings | Calendar, headlines and feed health; a filterable timeline of decisions, orders and logs; config, secret presence (never values) and the list of unsupported features |
+
+**Companion:** the orb in the corner (drag, pin, hide; Ctrl+. opens it). It answers from records ("explain current positions", "why is the agent waiting?", "summarize today", "why was that trade rejected?"). Answers are labelled *from records*, *LLM-generated* (only if `llm.provider` is set) or *backend result*. For anything that changes state (kill switch, decision cycle, research, data refresh) it only **proposes**; the action runs after you confirm, and it reports what the backend returned. It lives inside the browser tab; it doesn't float over other Windows apps.
+
+**Safety:** the server listens on 127.0.0.1 only and checks the Host header. Actions need a per-launch token and the same origin. There is no endpoint that enables execution, edits risk limits, clears the kill switch, cancels orders or closes positions. The risk engine and `execution.enabled` decide everything, exactly as from the CLI. Command palette: Ctrl+K.
 
 ## Layout
 

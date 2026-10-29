@@ -216,7 +216,9 @@ class RiskEngine:
             check(f"correlated_{ccy}", n < c.max_correlated_exposure,
                   f"{n} open positions already {'long' if d > 0 else 'short'} {ccy}")
 
-        # 5) event risk
+        # 5) event risk. events=None means the calendar is unknown (missing or stale): fail closed.
+        # An empty list means the calendar is current and has nothing scheduled.
+        check("event_calendar", events is not None, "economic calendar missing or out of date; no new entries until it is refreshed")
         window = timedelta(minutes=c.event_blackout_minutes)
         # A single-leg instrument (stock/ETF) is priced in the account currency, so that currency's events apply.
         affected = set(legs) if len(legs) > 1 else set(legs) | {a.account_currency}

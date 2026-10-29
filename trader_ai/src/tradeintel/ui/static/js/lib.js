@@ -76,7 +76,9 @@ export const fmt = {
   date(iso) {
     if (!iso) return '—';
     const d = new Date(iso);
-    return Number.isNaN(+d) ? String(iso) : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit', timeZone: 'UTC' });
+    if (Number.isNaN(+d)) return String(iso);
+    const sameYear = d.getUTCFullYear() === new Date().getUTCFullYear();
+    return d.toLocaleDateString(undefined, { year: sameYear ? undefined : 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
   },
   ago(iso) {
     if (!iso) return '—';
@@ -94,7 +96,7 @@ export const fmt = {
 };
 // timestamps: shown in local time, with the UTC ISO value in the tooltip
 export function when(iso, mode = 'time') {
-  return h('span', { title: iso ? `${iso} (UTC)` : '' }, mode === 'ago' ? fmt.ago(iso) : mode === 'date' ? fmt.date(iso) : fmt.time(iso));
+  return h('span', { class: 'nowrap', title: iso ? `${iso} (UTC)` : '' }, mode === 'ago' ? fmt.ago(iso) : mode === 'date' ? fmt.date(iso) : fmt.time(iso));
 }
 
 // ------------------------------------------------------------ api
@@ -163,8 +165,10 @@ export function stat(k, v, sub, tone = '') {
   return h('div', { class: 'stat' }, h('div', { class: 'k' }, k), h('div', { class: `v ${tone}` }, v), sub ? h('div', { class: 's', title: typeof sub === 'string' ? sub : '' }, sub) : null);
 }
 export function meter(frac) {
-  const f = Math.max(0, Math.min(1, frac || 0));
-  return h('div', { class: `meter ${f >= 1 ? 'b' : f >= 0.75 ? 'w' : ''}`, role: 'meter', 'aria-valuenow': Math.round(f * 100), 'aria-valuemin': 0, 'aria-valuemax': 100 },
+  // red only when a limit is exceeded; reaching it exactly is still allowed
+  const raw = frac || 0;
+  const f = Math.max(0, Math.min(1, raw));
+  return h('div', { class: `meter ${raw > 1 ? 'b' : raw >= 0.8 ? 'w' : ''}`, role: 'meter', 'aria-valuenow': Math.round(f * 100), 'aria-valuemin': 0, 'aria-valuemax': 100 },
     h('i', { style: { width: `${Math.max(f * 100, f > 0 ? 3 : 0)}%` } }));
 }
 

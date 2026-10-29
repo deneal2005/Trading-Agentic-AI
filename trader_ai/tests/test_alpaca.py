@@ -139,7 +139,7 @@ def test_usd_event_blocks_spy_order(settings, tmp_path):
     o = OrderIntent("SPY", 1, 10, 500.02, 490.0, None, "t", "k", NOW)
     a = AccountState(equity=100000, day_start_equity=100000, high_water_mark=100000)
     m = MarketState(500.0, 500.02, NOW - timedelta(seconds=2), NOW, 0.01)
-    assert eng.evaluate(o, a, m).approved
+    assert eng.evaluate(o, a, m, []).approved
     d = eng.evaluate(o, a, m, [EventWindow(NOW + timedelta(minutes=5), ("USD",), "CPI")])
     assert not d.checks["event_blackout"]
 

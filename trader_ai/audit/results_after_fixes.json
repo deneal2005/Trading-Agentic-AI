@@ -1,0 +1,128 @@
+[
+ {
+  "id": "M1",
+  "status": "PASS",
+  "title": "Features at t use only bars <= t (truncation test, 12 features)",
+  "evidence": "features recomputed on truncated history (cuts 400/800/1100) identical on overlapping rows: True"
+ },
+ {
+  "id": "M2",
+  "status": "PASS",
+  "title": "Label y_t = 1 if close[t+1] > close[t]; last row unlabeled",
+  "evidence": "matches definition: True"
+ },
+ {
+  "id": "M3",
+  "status": "FAIL",
+  "title": "Walk-forward has no purge gap between train and test",
+  "evidence": "last training row 2017-02-10 has a label built from the close of 2017-02-13, the first test row (1-bar label overlap; small but real leakage)."
+ },
+ {
+  "id": "D1-SPY",
+  "status": "PASS",
+  "title": "SPY stored bars re-validate cleanly",
+  "evidence": "rows=6746 dropped_on_revalidation={} duplicates=0 issues=['1 gaps larger than expected (first at 2001-09-17 00:00:00+00:00)']"
+ },
+ {
+  "id": "D2-SPY",
+  "status": "INFO",
+  "title": "SPY last stored bar",
+  "evidence": "2026-10-28T00:00:00+00:00 (now 2026-10-29T15:36+00:00)"
+ },
+ {
+  "id": "D1-EURUSD",
+  "status": "PASS",
+  "title": "EURUSD stored bars re-validate cleanly",
+  "evidence": "rows=4261 dropped_on_revalidation={} duplicates=0 issues=['1 gaps larger than expected (first at 2025-04-21 00:00:00+00:00)']"
+ },
+ {
+  "id": "D2-EURUSD",
+  "status": "INFO",
+  "title": "EURUSD last stored bar",
+  "evidence": "2026-10-29T00:00:00+00:00 (now 2026-10-29T15:36+00:00)"
+ },
+ {
+  "id": "D3",
+  "status": "PASS",
+  "title": "Today's unfinished daily bar is dropped before storage and before decisions",
+  "evidence": "mid-session probe: dropped 1 of 2 bars. Earlier ingestions that stored a partial bar (fixed on the next ingest): [('EURUSD', '2026-10-29 00:00:00+00:00', '2026-10-29T13:13:42.220381+00:00')]"
+ },
+ {
+  "id": "D3-history",
+  "status": "INFO",
+  "title": "Ingestion can store today's unfinished daily bar",
+  "evidence": "ingestions whose last bar is dated the same UTC day it was ingested (possible partial candle): [('EURUSD', '2026-10-29 00:00:00+00:00', '2026-10-29T13:13:42.220381+00:00')]"
+ },
+ {
+  "id": "G1",
+  "status": "PASS",
+  "title": "Promotion is scoped to instrument, timeframe and parameters",
+  "evidence": "a 'promotable' verdict for sma_cross on GBPUSD 1h (fast=50/slow=200) makes live sma_cross on EURUSD 1d (fast=10/slow=50) count as promoted: False"
+ },
+ {
+  "id": "R1",
+  "status": "PASS",
+  "title": "Day-start equity / high-water mark are recorded on every cycle",
+  "evidence": "cycle decision=hold; day_start_equity stored=10000.0, hwm=10000.0 (must be recorded on hold cycles too)"
+ },
+ {
+  "id": "K1",
+  "status": "PASS",
+  "title": "Event blackout fails closed when the calendar is missing",
+  "evidence": "order with no calendar available approved: False; events stored in the real DB right now: 0"
+ },
+ {
+  "id": "K2",
+  "status": "PASS",
+  "title": "Stale quote (90 s) is rejected",
+  "evidence": "approved=False; reasons=['quote is stale or from the future (age 0:01:30)', 'economic calendar missing or out of date; no new entries until it is refreshed']"
+ },
+ {
+  "id": "K3",
+  "status": "PASS",
+  "title": "Order price far from live quote is rejected",
+  "evidence": "approved=False"
+ },
+ {
+  "id": "K4",
+  "status": "PASS",
+  "title": "Consecutive-loss counter is updated from closed trades",
+  "evidence": "code that writes the counter: src/tradeintel/cli.py:232:        StateStore(s.paths.db_path).set(\"consecutive_losses\", 0)\nsrc/tradeintel/service.py:168:        state.set(\"consecutive_losses\", state.get(\"consecutive_losses\", 0) + 1 if loss else 0)"
+ },
+ {
+  "id": "K5",
+  "status": "PASS",
+  "title": "Kill switch persists across process restart (file-based)",
+  "evidence": "re-opened engaged=True"
+ },
+ {
+  "id": "K6",
+  "status": "PASS",
+  "title": "Engaged kill switch rejects every order",
+  "evidence": "approved=False"
+ },
+ {
+  "id": "E1",
+  "status": "FAIL",
+  "title": "Internal paper broker executes stop-losses",
+  "evidence": "price fell 500 pips through a 1.0950 stop; position still open: [1000.0]"
+ },
+ {
+  "id": "E2",
+  "status": "PASS",
+  "title": "Timeout with unknown order status does not create a duplicate order (Alpaca mock)",
+  "evidence": "1st submit: error; after a restart the pipeline re-sent the same order: rejected_by_risk (); orders accepted by the broker: 1. Protection comes only from the broker's unique client_order_id; the local audit doesn't treat 'error' as possibly-sent."
+ },
+ {
+  "id": "C1",
+  "status": "PASS",
+  "title": "Two decision cycles cannot run at once",
+  "evidence": "second acquire: another cycle is running"
+ },
+ {
+  "id": "G2",
+  "status": "PASS",
+  "title": "Single-use holdout must pass before a strategy may trade",
+  "evidence": "fixed-settings walk-forward passed on the same market, no holdout recorded -> approved to trade: False"
+ }
+]

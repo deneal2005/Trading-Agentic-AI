@@ -30,7 +30,7 @@ MKT = MarketState(bid=1.1000, ask=1.1001, quote_time=NOW - timedelta(seconds=2),
 
 
 def test_valid_order_approved(engine):
-    d = engine.evaluate(intent(), acct(), MKT)
+    d = engine.evaluate(intent(), acct(), MKT, [])
     assert d.approved, d.reasons
     assert d.risk_amount == pytest.approx(50.0)
 
@@ -45,7 +45,7 @@ def test_valid_order_approved(engine):
     ({"units": 600000, "stop_price": 1.1000}, "max_units"),
 ])
 def test_order_rejections(engine, kw, check):
-    d = engine.evaluate(intent(**kw), acct(), MKT)
+    d = engine.evaluate(intent(**kw), acct(), MKT, [])
     assert not d.approved and d.checks.get(check) is False, d.checks
 
 
@@ -57,30 +57,30 @@ def test_stale_quote_and_wide_spread(engine):
 def test_daily_loss_engages_persistent_kill_switch(settings, tmp_path):
     ks = KillSwitch(tmp_path / "KILL")
     e = RiskEngine(settings.risk, ks)
-    d = e.evaluate(intent(), acct(equity=9750, high_water_mark=10000), MKT)
+    d = e.evaluate(intent(), acct(equity=9750, high_water_mark=10000), MKT, [])
     assert not d.approved and d.halted and ks.engaged()
     # a fresh engine (restart) still refuses everything
-    d2 = RiskEngine(settings.risk, KillSwitch(tmp_path / "KILL")).evaluate(intent(idempotency_key="k2"), acct(), MKT)
+    d2 = RiskEngine(settings.risk, KillSwitch(tmp_path / "KILL")).evaluate(intent(idempotency_key="k2"), acct(), MKT, [])
     assert not d2.approved and "kill switch" in d2.reasons[0]
 
 
 def test_drawdown_halts(engine):
-    d = engine.evaluate(intent(), acct(equity=8900, day_start_equity=8900, high_water_mark=10000), MKT)
+    d = engine.evaluate(intent(), acct(equity=8900, day_start_equity=8900, high_water_mark=10000), MKT, [])
     assert d.halted and not d.checks["drawdown"]
 
 
 def test_live_environment_refused(engine):
-    assert not engine.evaluate(intent(), acct(environment="live"), MKT).checks["environment"]
+    assert not engine.evaluate(intent(), acct(environment="live"), MKT, []).checks["environment"]
 
 
 def test_duplicate_key_refused(engine):
-    assert engine.evaluate(intent(), acct(), MKT).approved
-    assert not engine.evaluate(intent(), acct(), MKT).checks["not_duplicate"]
+    assert engine.evaluate(intent(), acct(), MKT, []).approved
+    assert not engine.evaluate(intent(), acct(), MKT, []).checks["not_duplicate"]
 
 
 def test_duplicate_keys_survive_restart(settings, tmp_path):
     e = RiskEngine(settings.risk, KillSwitch(tmp_path / "K"), seen_keys={"k1"})
-    assert not e.evaluate(intent(), acct(), MKT).approved
+    assert not e.evaluate(intent(), acct(), MKT, []).approved
 
 
 def test_event_blackout(engine):
@@ -93,14 +93,14 @@ def test_event_blackout(engine):
 
 def test_aggregate_and_correlated_exposure(engine):
     open_pos = [Position("GBPUSD", 1, 10000, 1.30, 1.2950), Position("AUDUSD", 1, 10000, 0.66, 0.6550)]
-    d = engine.evaluate(intent(), acct(open_positions=open_pos), MKT)
+    d = engine.evaluate(intent(), acct(open_positions=open_pos), MKT, [])
     assert not d.checks["correlated_USD"]  # already short USD twice
     unstopped = [Position("GBPJPY", 1, 1000, 190.0, None)]
-    assert not engine.evaluate(intent(idempotency_key="z"), acct(open_positions=unstopped), MKT).checks["aggregate_risk"]
+    assert not engine.evaluate(intent(idempotency_key="z"), acct(open_positions=unstopped), MKT, []).checks["aggregate_risk"]
 
 
 def test_consecutive_losses_pause(engine):
-    assert not engine.evaluate(intent(), acct(consecutive_losses=5), MKT).checks["consecutive_losses"]
+    assert not engine.evaluate(intent(), acct(consecutive_losses=5), MKT, []).checks["consecutive_losses"]
 
 
 def test_currency_legs():

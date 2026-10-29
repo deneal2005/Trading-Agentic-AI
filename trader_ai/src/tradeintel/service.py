@@ -15,7 +15,7 @@ from .agents.coordinator import DecisionContext, DecisionLog, coordinate
 from .backtest.metrics import regime_labels
 from .config import Settings
 from .data.store import BarStore, connect
-from .data.validate import TIMEFRAME_DELTA
+from .data.validate import TIMEFRAME_DELTA, drop_unfinished
 from .execution.broker import Broker, BrokerError
 from .execution.paper import PaperBroker
 from .execution.pipeline import ExecutionPipeline
@@ -91,9 +91,85 @@ def max_bar_age(s: Settings) -> timedelta:
     return TIMEFRAME_DELTA[tf] * (s.data.max_staleness_bars + 1) + (timedelta(days=2) if tf == "1d" else timedelta(0))
 
 
-def strategy_promoted(s: Settings, name: str) -> bool:
-    return any(e["strategy"] == name and e["verdict"] == "promotable" and e["data_source"] != "SYNTHETIC"
-               for e in Registry(s.paths.db_path).list(500, kind="walkforward"))
+def strategy_promoted(s: Settings, name: str, params: dict | None = None) -> bool:
+    """Approved to trade only for this exact market, timeframe and settings: a walk-forward on real data that traded
+    these settings in every fold passed the gate, AND the single-use holdout with these settings passed."""
+    try:
+        live = build(name, **(params if params is not None else s.live.params if name == s.live.strategy else {})).params
+    except (KeyError, ValueError):
+        return False
+
+    def same(p) -> bool:
+        try:
+            return build(name, **(p or {})).params == live
+        except (KeyError, ValueError):
+            return False
+
+    m = s.market
+    mine = [e for e in Registry(s.paths.db_path).list(100_000)
+            if e["strategy"] == name and e["instrument"] == m.instrument and e["timeframe"] == m.timeframe
+            and e["data_source"] not in ("SYNTHETIC", "unknown") and same(e["params"])]
+    walk_forward_ok = any(e["kind"] == "walkforward" and e["verdict"] == "promotable"
+                          and (folds := e["metrics"].get("folds")) and all(same(f["params"]) for f in folds) for e in mine)
+    holdout_ok = any(e["kind"] == "holdout" and e["verdict"] == "passed" for e in mine)
+    return walk_forward_ok and holdout_ok
+
+
+def calendar_fresh(ns: NewsStore, now: datetime) -> bool:
+    """True once this week's economic calendar has been fetched (the Forex Factory export covers Sunday to Saturday)."""
+    week_start = (now - timedelta(days=(now.weekday() + 1) % 7)).replace(hour=0, minute=0, second=0, microsecond=0)
+    with connect(ns.db_path) as con:  # any successful fetch this week; a later failed retry doesn't void it
+        last_ok = con.execute("SELECT MAX(at) FROM source_health WHERE source='forexfactory' AND ok=1").fetchone()[0]
+    return bool(last_ok) and last_ok >= week_start.isoformat()
+
+
+def ensure_calendar(s: Settings, now: datetime | None = None) -> bool:
+    """Refresh news and the calendar when this week's calendar is missing. Network failures are logged, not raised."""
+    ns = NewsStore(s.paths.db_path)
+    now = now or datetime.now(timezone.utc)
+    if not calendar_fresh(ns, now):
+        try:
+            from .cli import news_ingest
+            news_ingest(s)
+        except Exception:
+            log.exception("calendar refresh failed")
+    return calendar_fresh(ns, now)
+
+
+def account_guard(s: Settings, state: StateStore, kill: KillSwitch, equity: float, now: datetime) -> dict:
+    """Runs on every cycle, order or not: records day-start equity and the high-water mark, and engages the kill
+    switch on a daily-loss or drawdown breach. It doesn't close positions; that stays a human decision."""
+    today = now.date().isoformat()
+    if state.get("day") != today:
+        state.set("day", today)
+        state.set("day_start_equity", equity)
+    hwm = max(state.get("hwm", equity), equity)
+    state.set("hwm", hwm)
+    day0 = state.get("day_start_equity", equity)
+    daily = (day0 - equity) / day0 if day0 else 0.0
+    dd = (hwm - equity) / hwm if hwm else 0.0
+    if daily >= s.risk.max_daily_loss:
+        kill.engage(f"max daily loss reached ({daily:.2%}), detected by the cycle check")
+    if dd >= s.risk.max_drawdown:
+        kill.engage(f"max drawdown reached ({dd:.2%}), detected by the cycle check")
+    return {"day_start_equity": day0, "hwm": hwm, "daily_loss": daily, "drawdown": dd}
+
+
+def update_loss_streak(state: StateStore, instrument: str, pos, mark: float | None) -> None:
+    """Counts losing round trips in a row for the consecutive-loss limit.
+    shortcut: a trade is judged by the market price when the cycle notices it closed, not by its actual fill;
+    upgrade once fills are reconciled (audit F-07)."""
+    prev = state.get("open_trade")
+    direction = (1 if pos.units > 0 else -1) if pos else 0
+    if prev and prev["direction"] != direction:  # the tracked trade closed (stop, exit or reversal)
+        if mark is None:
+            return  # no price now; judge it on a later cycle
+        loss = (mark - prev["entry"]) * prev["direction"] < 0
+        state.set("consecutive_losses", state.get("consecutive_losses", 0) + 1 if loss else 0)
+        state.set("open_trade", None)
+        prev = None
+    if pos and not prev:
+        state.set("open_trade", {"instrument": instrument, "direction": direction, "entry": pos.avg_price})
 
 
 def run_cycle(s: Settings, broker: Broker | None = None, now: datetime | None = None) -> dict:
@@ -101,6 +177,10 @@ def run_cycle(s: Settings, broker: Broker | None = None, now: datetime | None = 
     m = s.market
     with single_instance(s.paths.db_path.parent / "cycle.lock"):
         bars = BarStore(s.paths.db_path).load(m.instrument, m.timeframe)
+        if not bars.empty:  # a stored candle whose period isn't over yet must not drive a decision
+            source = bars.attrs.get("source")
+            bars, _ = drop_unfinished(bars, m.timeframe, m.asset_class, now)
+            bars.attrs["source"] = source
         if bars.empty:
             return {"status": "abstain", "reason": "no stored bars; run `tradeintel data ingest` first"}
         strat = build(s.live.strategy, **s.live.params)
@@ -112,32 +192,37 @@ def run_cycle(s: Settings, broker: Broker | None = None, now: datetime | None = 
         broker = broker or make_broker(s)
         try:
             pos = [p for p in broker.positions() if p.instrument == m.instrument]
+            acct = broker.account()
         except BrokerError as e:
             return {"status": "abstain", "reason": f"broker unavailable: {e}"}
         cur = (1 if pos[0].units > 0 else -1) if pos else 0
+        state = StateStore(s.paths.db_path)
+        kill = KillSwitch(s.paths.kill_switch_file)
+        guard = account_guard(s, state, kill, acct.equity, now)
+        if pos or state.get("open_trade"):
+            try:
+                q = broker.quote(m.instrument)
+                mark = (q.bid + q.ask) / 2
+            except BrokerError:
+                mark = None
+            update_loss_streak(state, m.instrument, pos[0] if pos else None, mark)
         ctx = DecisionContext(m.instrument, bars, sig, strat.name, now, max_bar_age(s), cur, events,
                               regime=str(regime_labels(bars).iloc[-1]))
         d = coordinate(ctx, "multi")
         DecisionLog(s.paths.db_path).record(ctx, d)
-        out = {"decision": d.action, "reasons": d.reasons}
+        out = {"decision": d.action, "reasons": d.reasons, "account": guard}
+        if kill.engaged():
+            out["halted"] = kill.reason()
         if d.action in ("hold", "abstain"):
             return out
 
         promoted = strategy_promoted(s, strat.name)
         enabled = s.execution.enabled and (promoted or not s.live.require_promotion)
         if s.execution.enabled and not enabled:
-            out["note"] = f"{strat.name} has no promotable verdict on real data; dry run only"
+            out["note"] = (f"{strat.name} isn't approved for {m.instrument} {m.timeframe} with these settings "
+                           "(needs a passing fixed-settings walk-forward and holdout on real data); dry run only")
+        hwm = guard["hwm"]
 
-        state = StateStore(s.paths.db_path)
-        acct = broker.account()
-        today = now.date().isoformat()
-        if state.get("day") != today:
-            state.set("day", today)
-            state.set("day_start_equity", acct.equity)
-        hwm = max(state.get("hwm", acct.equity), acct.equity)
-        state.set("hwm", hwm)
-
-        kill = KillSwitch(s.paths.kill_switch_file)
         pipe = ExecutionPipeline(s.paths.db_path, broker, RiskEngine(s.risk, kill), enabled)
         pipe.risk._seen_keys |= pipe.submitted_keys()
 
@@ -163,8 +248,11 @@ def run_cycle(s: Settings, broker: Broker | None = None, now: datetime | None = 
                              f"{strat.name}|{m.instrument}|{bars.index[-1].isoformat()}|{direction}", now)
         windows = [EventWindow(datetime.fromisoformat(e["event_time"]), (e["currency"],), e["title"])
                    for e in events if e["impact"] == "high"]
+        if not calendar_fresh(ns, now):
+            windows = None  # unknown event risk: the risk engine refuses new entries
+            out["calendar"] = "this week's economic calendar is missing; new entries blocked"
         out["execution"] = pipe.execute(intent, {"action": d.action, "reasons": d.reasons},
-                                        state.get("day_start_equity", acct.equity), hwm,
+                                        guard["day_start_equity"], hwm,
                                         state.get("consecutive_losses", 0), m.pip_size, windows)
         return out
 
@@ -173,6 +261,7 @@ def run_service(s: Settings, interval_s: int = 900, max_cycles: int | None = Non
     n = 0
     while max_cycles is None or n < max_cycles:
         try:
+            ensure_calendar(s)
             log.info("cycle", extra={"data": run_cycle(s)})
         except Exception:
             log.exception("cycle failed")

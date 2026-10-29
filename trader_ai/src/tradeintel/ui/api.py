@@ -198,29 +198,35 @@ def alerts(s: Settings, br: dict, data: dict, ks: dict) -> list[dict]:
     def add(level, key, title, detail="", at=None):
         out.append({"level": level, "key": key, "title": title, "detail": detail, "at": at})
 
+    unit = "cents" if s.market.pip_size == 0.01 else "pips"
     if ks["engaged"]:
-        add("danger", f"kill:{ks.get('at')}", "Kill switch engaged", ks.get("reason", ""), ks.get("at"))
+        add("danger", f"kill:{ks.get('at')}", "Emergency stop is on: new orders are blocked", f"Reason: {ks.get('reason', '')}", ks.get("at"))
     if not br.get("available"):
-        add("danger", "broker", f"Broker '{br.get('broker')}' unavailable", br.get("error", ""))
+        add("danger", "broker", f"Can't reach the {br.get('broker')} account", br.get("error", ""))
     elif br.get("quote_error"):
-        add("warn", "quote", "No live quote", br["quote_error"])
+        add("warn", "quote", f"No live {s.market.instrument} price", br["quote_error"])
     elif br.get("quote") and br["quote"]["spread_pips"] > s.risk.max_spread_pips:
         q = br["quote"]
-        add("warn", f"spread:{q['time'][:16]}", f"Spread {q['spread']} is above the risk limit",
-            f"{q['spread_pips']} > {s.risk.max_spread_pips} pips/cents: the risk engine would reject an order now")
+        add("warn", f"spread:{q['time'][:16]}", f"{s.market.instrument}'s buy/sell gap is wider than allowed",
+            f"The gap is {q['spread_pips']:g} {unit}; the safety limit is {s.risk.max_spread_pips:g}, so an order now would be refused. "
+            "It usually narrows a few minutes after the market opens.")
     if data["error"]:
-        add("danger", "bars", "Stored bars can't be loaded", data["error"])
+        add("danger", "bars", "Stored prices can't be loaded", data["error"])
     elif data["stale"]:
-        add("warn", f"stale:{data['last_bar']}", "Market data is stale",
-            f"last {data['instrument']} bar {data['last_bar'] or 'none'}; run Refresh data")
+        add("warn", f"stale:{data['last_bar']}", "Price data is out of date",
+            f"The latest {data['instrument']} bar is from {data['last_bar'] or 'never'}. Use “Refresh price data” on the Chart page.")
+    from ..service import calendar_fresh
+    if not calendar_fresh(NewsStore(s.paths.db_path), _now()):
+        add("warn", f"calendar:{_now().date()}", "This week's economic calendar is missing: new entries are blocked",
+            "Press “Refresh news & calendar”. Checks also refresh it automatically.")
     for h in NewsStore(s.paths.db_path).health():
         if not h["ok"]:
-            add("warn", f"feed:{h['source']}:{h['at']}", f"News feed '{h['source']}' failed", h["error"] or "", h["at"])
+            add("warn", f"feed:{h['source']}:{h['at']}", f"The {h['source']} news feed failed", h["error"] or "", h["at"])
     day_ago = (_now() - timedelta(days=1)).isoformat()
     for r in audit_rows(s, 50):
         risk = r["risk"] or {}
         if r["at"] >= day_ago and risk and not risk.get("approved"):
-            add("warn", f"reject:{r['id']}", "Order intent rejected by risk", "; ".join(risk.get("reasons", [])), r["at"])
+            add("warn", f"reject:{r['id']}", "A safety check refused an order", "; ".join(risk.get("reasons", [])), r["at"])
     return out
 
 
@@ -375,27 +381,27 @@ def risk_view(s: Settings, cache: BrokerCache) -> dict:
     lev = (sum(n for n in notionals if n is not None) / eq) if eq and None not in notionals else None
     r = s.risk
     util = [
-        {"limit": "Daily loss", "max": r.max_daily_loss, "unit": "pct",
+        {"limit": "Loss today", "max": r.max_daily_loss, "unit": "pct",
          "value": (day_start - eq) / day_start if eq and day_start else None,
-         "note": "" if day_start else "day-start equity is recorded by the first decision cycle of the day"},
-        {"limit": "Drawdown from high-water mark", "max": r.max_drawdown, "unit": "pct",
+         "note": "" if day_start else "Starts counting after today's first check."},
+        {"limit": "Drop from the account’s peak", "max": r.max_drawdown, "unit": "pct",
          "value": (max(hwm, eq) - eq) / max(hwm, eq) if eq and hwm else None,
-         "note": "" if hwm else "high-water mark is recorded by decision cycles"},
-        {"limit": "Leverage", "max": r.max_leverage, "unit": "x", "value": lev,
-         "note": "" if lev is not None else "unavailable (no broker data, or cross-currency position)"},
-        {"limit": "Open positions per instrument", "max": r.max_positions_per_instrument, "unit": "count",
+         "note": "" if hwm else "Recorded once checks have run."},
+        {"limit": "Position size vs account (leverage)", "max": r.max_leverage, "unit": "x", "value": lev,
+         "note": "" if lev is not None else "Not available (no broker data, or a cross-currency position)."},
+        {"limit": "Positions in one instrument", "max": r.max_positions_per_instrument, "unit": "count",
          "value": max([sum(1 for p in positions if p["instrument"] == i) for i in {p["instrument"] for p in positions}] or [0])
          if br.get("available") else None, "note": ""},
-        {"limit": "Aggregate open risk", "max": r.max_open_risk, "unit": "pct",
+        {"limit": "Money at risk in open trades", "max": r.max_open_risk, "unit": "pct",
          "value": 0.0 if br.get("available") and not positions else None,
-         "note": "" if not positions else "the broker doesn't report stops on positions, so the engine treats open risk as unbounded"},
-        {"limit": "Consecutive losses", "max": r.max_consecutive_losses, "unit": "count", "value": _kv(s, "consecutive_losses"),
-         "note": "counter isn't wired to closed trades yet (see PROJECT_PLAN)"},
+         "note": "" if not positions else "The broker doesn't report stop prices, so open risk is treated as unlimited."},
+        {"limit": "Losing trades in a row", "max": r.max_consecutive_losses, "unit": "count", "value": _kv(s, "consecutive_losses"),
+         "note": "Each closed trade is judged by the market price when a check notices it closed (approximate until fills are reconciled)."},
     ]
     q = br.get("quote")
     if q:
-        util.append({"limit": "Spread (current quote)", "max": r.max_spread_pips, "unit": "pips", "value": q["spread_pips"],
-                     "note": f"{s.market.instrument}: 1 pip = {s.market.pip_size}"})
+        util.append({"limit": "Buy/sell price gap now", "max": r.max_spread_pips, "unit": "pips", "value": q["spread_pips"],
+                     "note": f"Gap between the buy and sell price, in {'cents' if s.market.pip_size == 0.01 else 'pips'}."})
     now = _now()
     legs = set(currency_legs(s.market.instrument, 1))
     affected = legs if len(legs) > 1 else legs | {s.market.account_currency}
@@ -423,7 +429,9 @@ def research_view(s: Settings) -> dict:
     strategies = []
     for name, cls in REGISTRY.items():
         st = cls()
-        strategies.append({"name": name, "family": cls.family, "doc": inspect.getdoc(cls) or "",
+        own_doc = inspect.cleandoc(cls.__dict__["__doc__"]) if cls.__dict__.get("__doc__") else ""  # not the base class's
+        baseline_doc = {"no_trade": "Baseline: never trades.", "buy_and_hold": "Baseline: buys once and holds."}
+        strategies.append({"name": name, "family": cls.family, "doc": own_doc or baseline_doc.get(name, ""),
                            "defaults": st.params, "grid_size": len(st.grid()), "requires_stop": cls.requires_stop,
                            "baseline": name in ("no_trade", "buy_and_hold"), "is_live": name == s.live.strategy,
                            "total_trials": reg.total_trials(name), "promoted": strategy_promoted(s, name),
@@ -527,7 +535,8 @@ def act_kill(s: Settings, reason: str) -> dict:
 
 
 def act_run_once(s: Settings) -> dict:
-    from ..service import run_cycle
+    from ..service import ensure_calendar, run_cycle
+    ensure_calendar(s)
     try:
         return {"ok": True, "result": run_cycle(s)}
     except RuntimeError as e:

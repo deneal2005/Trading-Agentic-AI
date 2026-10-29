@@ -160,7 +160,7 @@ class Companion:
 
     def _risk(self, q, ctx):
         r = api.risk_view(self.s, self.cache)
-        lines = ["Kill switch: " + (f"ENGAGED ({r['kill_switch'].get('reason')})" if r["kill_switch"]["engaged"] else "clear")]
+        lines = ["Emergency stop: " + (f"ON, orders blocked ({r['kill_switch'].get('reason')})" if r["kill_switch"]["engaged"] else "off")]
         for u in r["utilisation"]:
             v = u["value"]
             shown = "n/a" if v is None else (_pct(v) if u["unit"] == "pct" else f"{v:.2f}{'x' if u['unit'] == 'x' else ''}")
@@ -174,10 +174,10 @@ class Companion:
     # ------------------------------------------------------------ proposals (never executed here)
 
     def _kill(self, q, ctx):
-        return {"reply": "I can engage the kill switch. That blocks every new order, but it does not close positions "
-                         "or cancel resting broker orders. Clearing it later needs `tradeintel risk reset` in a terminal.",
+        return {"reply": "I can turn on the emergency stop. Every new order is then refused, but it does not sell what you hold "
+                         "or cancel orders already at the broker. Turning it off later needs `tradeintel risk reset` in a terminal.",
                 "source": "system",
-                "proposal": {"action": "kill", "args": {"reason": "companion request"}, "label": "Engage kill switch",
+                "proposal": {"action": "kill", "args": {"reason": "assistant request"}, "label": "Stop all new orders",
                              "danger": True}}
 
     def _run_once(self, q, ctx):

@@ -130,7 +130,7 @@ def test_kill_action_engages_switch_and_says_positions_stay_open(server, setting
     assert "NOT closed" in body["note"]
     st = json.loads(call(server, "GET", "/api/state")[1])
     assert st["kill_switch"]["engaged"] and st["agent"]["state"] == "halted"
-    assert any(a["title"] == "Kill switch engaged" for a in st["alerts"])
+    assert any(a["title"].startswith("Emergency stop is on") for a in st["alerts"])
 
 
 def test_backtest_action_is_labelled_in_sample_and_validates_input(server):

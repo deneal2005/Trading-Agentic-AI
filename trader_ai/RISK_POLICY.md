@@ -17,8 +17,9 @@ The risk engine (`src/tradeintel/risk/engine.py`) is deterministic and independe
 | Max spread | 3 pips | reject |
 | Quote staleness | 30 s | reject |
 | Price consistency (order vs quote) | 1% | reject |
-| Consecutive losses | 5 | reject new entries (pause and review) |
-| Event blackout | ±30 min around high-impact events for either currency | reject |
+| Consecutive losses | 5 | reject new entries (pause and review). Counted per closed round trip, judged by the market price when a cycle notices the close (approximate until fills are reconciled). `tradeintel risk reset` clears it |
+| Event blackout | ±30 min around high-impact events for either currency (for a stock/ETF: the account currency) | reject |
+| Economic calendar unknown | this week's calendar not fetched successfully | reject new entries (fail closed). Cycles try to refresh it first |
 | Stop-loss required | yes, on the correct side | reject |
 | Duplicate order key | reject (keys persisted in the audit log, survive restart) | reject |
 | Account environment | paper or practice only | reject. The pipeline raises on a live account |
@@ -26,12 +27,16 @@ The risk engine (`src/tradeintel/risk/engine.py`) is deterministic and independe
 
 ## Kill switch
 - File: `var/KILL_SWITCH` (JSON with reason and time). It survives restarts.
-- It engages automatically on a daily-loss or drawdown breach, or manually with `tradeintel risk kill --reason ...`.
+- It engages automatically on a daily-loss or drawdown breach, or manually with `tradeintel risk kill --reason ...`. Every decision cycle checks daily loss and drawdown, whether or not it proposes an order. Day-start equity and the high-water mark are recorded on every cycle. It never closes positions by itself.
 - `ExecutionPipeline.emergency_stop()` engages it and closes all positions.
 - Only a human can clear it, with `tradeintel risk reset`, which requires typing `RESET`. Review the cause first.
 
 ## Promotion criteria (placeholders until the target market and risk budget are confirmed)
-A strategy may be used for demo orders only with a `promotable` walk-forward verdict on non-synthetic data. That requires all of:
+A strategy may send demo orders only when, for the **exact** instrument, timeframe and parameter set it trades (enforced in `service.strategy_promoted`):
+1. a walk-forward on non-synthetic data has a `promotable` verdict **and traded those parameters in every fold** (run it with `--no-optimize` on the live settings), and
+2. the single-use holdout (`tradeintel holdout`) with those parameters has verdict `passed`: net return > 0, Sharpe > 0, max drawdown ≤ the OOS limit below.
+
+The walk-forward verdict requires all of:
 - at least 60 out-of-sample trades
 - OOS Sharpe ≥ 0.5, and a bootstrap 90% CI lower bound > 0
 - OOS max drawdown ≤ 15%
@@ -39,7 +44,7 @@ A strategy may be used for demo orders only with a `promotable` walk-forward ver
 - beats both the no-trade and buy-and-hold baselines on Sharpe and net return
 - still profitable at 2x costs
 
-After promotion, a single holdout test (`tradeintel holdout`) should confirm the result before demo use. That step is a manual requirement and isn't enforced in code yet. See PROJECT_PLAN.
+Unfinished candles (today's bar while its session is still open) are dropped at ingest and again before every decision, so live signals use the same finished bars as backtests.
 
 These thresholds are deliberately modest placeholders, not evidence of profitability. They must be set from your risk budget before demo trading.
 

@@ -33,6 +33,7 @@ from .companion import Companion
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
+mimetypes.add_type("font/woff2", ".woff2")  # not in Windows' registry by default
 MAX_BODY = 64 * 1024
 # inline styles are needed by the chart library; scripts stay 'self'-only
 CSP_APP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "

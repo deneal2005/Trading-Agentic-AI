@@ -8,8 +8,9 @@ Safety model:
   websites can't read the token, so they can't trigger actions.
 - Actions call the same backend code as the CLI: the risk engine, kill
   switch, promotion gate and `execution.enabled` still decide everything.
-  There is no endpoint that enables execution, edits risk limits, clears
-  the kill switch, cancels orders or closes positions.
+  There is no endpoint that enables execution, edits risk limits, cancels
+  orders or closes positions. Clearing the kill switch needs the typed
+  word RESET, like the CLI, and is written to the audit table.
 """
 
 from __future__ import annotations
@@ -100,6 +101,8 @@ class App:
             return self.companion.ask(str(body.get("message", "")), body.get("context") if isinstance(body.get("context"), dict) else {})
         if path == "/api/actions/kill":
             return api.act_kill(s, str(body.get("reason", "")))
+        if path == "/api/actions/reset-kill":
+            return api.act_reset_kill(s, str(body.get("confirm", "")))
         if path == "/api/actions/run-once":
             out = api.act_run_once(s)
             self.cache.get(force=True)
@@ -149,6 +152,8 @@ def make_handler(app: App):
         def _api(self, fn):
             try:
                 self._json(200, fn())
+            except ConnectionError:  # the page cancelled the request (e.g. switched screens): nothing to report
+                return
             except KeyError as e:
                 self._json(404, {"error": f"not found: {e}"})
             except ValueError as e:  # bad query/body values

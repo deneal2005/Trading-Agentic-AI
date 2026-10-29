@@ -42,7 +42,8 @@ class Companion:
         self._lock = threading.Lock()
         # (name, pattern) checked in order; the first match wins
         self.intents = [
-            ("kill", r"\b(pause|halt|stop)\b.*\b(trad|order|proposal)|kill.?switch|emergency"),
+            ("unkill", r"(turn off|switch off|clear|reset|disable|release|undo|remove)\b.*(emergency|kill|stop)|resume trading|unpause"),
+            ("kill",r"\b(pause|halt|stop)\b.*\b(trad|order|proposal)|kill.?switch|emergency"),
             ("run_once", r"run (a |one |the )?(decision )?cycle|run.?once"),
             ("research", r"\bresearch\b|walk.?forward"),
             ("backtest", r"backtest"),
@@ -179,6 +180,15 @@ class Companion:
                 "source": "system",
                 "proposal": {"action": "kill", "args": {"reason": "assistant request"}, "label": "Stop all new orders",
                              "danger": True}}
+
+    def _unkill(self, q, ctx):
+        ks = api.kill_switch(self.s)
+        if not ks["engaged"]:
+            return {"reply": "The emergency stop is already off.", "source": "records"}
+        return {"reply": f"The emergency stop is on ({ks.get('reason', '')}). Turning it off lets new orders through again, "
+                         "but only if every other safety check passes. You'll be asked to type RESET.",
+                "source": "system",
+                "proposal": {"action": "reset-kill", "args": {"confirm": "RESET"}, "label": "Turn off the emergency stop", "danger": True}}
 
     def _run_once(self, q, ctx):
         return {"reply": "I can run one decision cycle now. It records a decision and, because order submission is "

@@ -71,7 +71,7 @@ export const fmt = {
   time(iso) {
     if (!iso) return '—';
     const d = new Date(iso);
-    return Number.isNaN(+d) ? String(iso) : d.toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return Number.isNaN(+d) ? String(iso) : d.toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
   },
   date(iso) {
     if (!iso) return '—';
@@ -215,12 +215,17 @@ export function confirmDialog({ title, body, confirm = 'Confirm', danger = false
   });
 }
 
-export function toast(msg, tone = '') {
+// A sticky toast stays until update()/close(); update() swaps in the result and then fades it out.
+export function toast(msg, tone = '', { sticky = false } = {}) {
   let box = document.querySelector('.toasts');
   if (!box) { box = h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' }); document.body.append(box); }
   const t = h('div', { class: `toast ${tone}` }, msg);
   box.append(t);
-  setTimeout(() => t.remove(), 5200);
+  let timer = sticky ? null : setTimeout(() => t.remove(), 7000);
+  return {
+    update(m, tn = '') { t.className = `toast ${tn}`; t.replaceChildren(m); clearTimeout(timer); timer = setTimeout(() => t.remove(), 9000); },
+    close() { clearTimeout(timer); t.remove(); },
+  };
 }
 
 export function pre(obj) {

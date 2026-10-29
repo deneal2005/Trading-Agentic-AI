@@ -118,7 +118,21 @@ def test_static_path_traversal_is_blocked(server):
         assert call(server, "GET", p)[0] == 404, p
 
 
-def test_no_endpoint_can_enable_execution_reset_kill_or_close_positions(server):
+def test_turning_off_the_emergency_stop_needs_typed_reset_and_is_audited(app, server, settings):
+    post(server, "/api/actions/kill", {"reason": "t"})
+    ks = KillSwitch(settings.paths.kill_switch_file)
+    assert json.loads(post(server, "/api/actions/reset-kill", {"confirm": "reset"})[1])["ok"] is False and ks.engaged()
+    assert json.loads(post(server, "/api/actions/reset-kill", {})[1])["ok"] is False and ks.engaged()
+    assert json.loads(post(server, "/api/actions/reset-kill", {"confirm": "RESET"})[1])["ok"] and not ks.engaged()
+    row = api.audit_rows(settings, 1)[0]
+    assert row["mode"] == "manual" and row["order_result"]["status"] == "cleared"
+    # the assistant only proposes it, as a dangerous action (the app then asks for the typed RESET)
+    ks.engage("again")
+    p = app.companion.ask("please turn off the emergency stop", {})["proposal"]
+    assert p["action"] == "reset-kill" and p["danger"] and ks.engaged()
+
+
+def test_no_endpoint_can_enable_execution_or_close_positions(server):
     for p in ["/api/actions/enable", "/api/actions/reset", "/api/actions/close-all", "/api/actions/cancel", "/api/config"]:
         assert post(server, p)[0] == 404, p
 

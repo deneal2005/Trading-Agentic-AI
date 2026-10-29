@@ -1,10 +1,36 @@
 // Screens. Each page is (ctx) => { el, destroy? }. Every number shown comes from
 // the backend; anything unavailable is labelled as such.
-import { h, s, api, fmt, when, panel, flush, badge, table, kv, stat, meter, loadInto, emptyState, errorState, pre, icon, store } from './lib.js';
+import { h, s, api, fmt, when, panel, flush, badge, table, kv, stat, meter, loadInto, loading, emptyState, errorState, pre, icon, store } from './lib.js';
+
+const killReason = (r) => (r || 'no reason recorded').replace(/^ui: engaged from UI$/, 'turned on from this app').replace(/^ui: /, '');
+
+// Currencies whose announcements can move the traded market: both legs of an FX pair, else the account currency.
+function relevantCcys(st) {
+  const i = st.market.instrument;
+  return st.market.asset_class === 'forex' && /^[A-Z]{6}$/.test(i) ? [i.slice(0, 3), i.slice(3)] : [st.broker.currency || 'USD'];
+}
+
+const ACTION_WORDS = { abstain: 'No trade', hold: 'No change', exit: 'Close position', enter_long: 'Buy', enter_short: 'Sell short' };
+function decisionText(d) {
+  const r = (d.reasons || []).join('; ');
+  const why = r.startsWith('objections to new entry: ')
+    ? `held back because ${r.slice(25).split('; ').map(plainObjection).join(', and ')}`
+    : r.replace(/^signal unchanged$/, 'the signal hasn’t changed').replace(/^signal flat$/, 'the signal turned flat');
+  return `${ACTION_WORDS[d.action] || d.action} on ${d.instrument}: ${why}`;
+}
+
+// One control for the emergency stop: turns it on, or, when it's on, turns it off again (you type RESET).
+function killButton(ctx, engaged) {
+  return engaged
+    ? h('button', { class: 'btn', onclick: (e) => ctx.act('reset-kill', { confirm: 'RESET' }, { button: e.currentTarget }) }, 'Turn off emergency stop…')
+    : h('button', { class: 'btn danger', onclick: (e) => ctx.act('kill', {}, { button: e.currentTarget }) }, icon('bolt'), 'Stop all new orders');
+}
 
 export { brain } from './brain.js';
 
 const LWC = window.LightweightCharts;
+// a chart may be destroyed by a page switch and again by a later reload; removing it twice throws
+const once = (fn) => { let done = false; return () => { if (!done) { done = true; fn(); } }; };
 const C = { bg: '#111418', grid: '#191d22', text: '#7d8590', border: '#22272e', pos: '#2ebd85', neg: '#f0565b', ai: '#8b7cf6', info: '#5aa9ff', warn: '#e8a13a', sma50: '#5aa9ff', sma200: '#c79bff' };
 const ACTION_TONE = { enter_long: 'pos', enter_short: 'neg', exit: 'warn', hold: '', abstain: 'ai' };
 const STANCE_TONE = { long: 'pos', short: 'neg', neutral: '', abstain: 'ai' };
@@ -63,7 +89,7 @@ function priceChart(el, d, show = {}) {
   setLegend(last);
   chart.subscribeCrosshairMove((p) => setLegend(p?.seriesData?.get(candles) || last));
   chart.timeScale().fitContent();
-  return { chart, destroy: () => chart.remove() };
+  return { chart, destroy: once(() => chart.remove()) };
 }
 
 function lineChart(el, series) {
@@ -71,7 +97,7 @@ function lineChart(el, series) {
   if (!chart) return { destroy() {} };
   for (const sr of series) chart.addLineSeries({ color: sr.color, lineWidth: sr.width || 1.5, priceLineVisible: false, title: sr.title }).setData(sr.data.filter((p) => p.value != null));
   chart.timeScale().fitContent();
-  return { chart, destroy: () => chart.remove() };
+  return { chart, destroy: once(() => chart.remove()) };
 }
 
 function head(title, sub, ...tools) {
@@ -83,7 +109,7 @@ function sourceBadge(src) {
   return src === 'SYNTHETIC' ? badge('SYNTHETIC', 'warn') : badge(src, 'info');
 }
 
-function actionBadge(a) { return badge(a.replace('_', ' '), ACTION_TONE[a] || ''); }
+function actionBadge(a) { return badge((ACTION_WORDS[a] || a.replace('_', ' ')).toLowerCase(), ACTION_TONE[a] || ''); }
 
 function envLabel(st) {
   const b = st.broker;
@@ -115,7 +141,7 @@ function plainObjection(o) {
 function story(st, d) {
   const sym = st.market.instrument;
   const rule = STRAT_NAMES[st.strategy.name] || st.strategy.name;
-  if (st.kill_switch.engaged) return { h: ['Trading is stopped. ', h('span', { class: 'ai' }, 'The emergency stop is on.')], why: `Reason recorded: ${st.kill_switch.reason}. New orders are refused until it is reset in a terminal.` };
+  if (st.kill_switch.engaged) return { h: ['Trading is stopped. ', h('span', { class: 'ai' }, 'The emergency stop is on.')], why: `Reason: ${killReason(st.kill_switch.reason)}${st.kill_switch.at ? ` (${fmt.time(st.kill_switch.at)})` : ''}. New orders are refused until you turn it off with the button below.` };
   if (!d) return { h: [`Watching ${sym}. `, h('span', { class: 'ai' }, 'No check has run yet.')], why: 'Run a check to see what the strategy and the AI agents make of the latest prices.' };
   const market = (d.reports || []).find((r) => r.agent === 'market');
   const side = market?.stance === 'long' ? 'buy' : market?.stance === 'short' ? 'sell' : 'stay out';
@@ -173,7 +199,7 @@ export function overview(ctx) {
     h('div', { class: 'grid' },
       h('div', { class: 'c4' }, panel('Paper account', acct)),
       h('div', { class: 'c8' }, panel(`${ctx.state.market.instrument} price`, flush(chartSlot), {
-        meta: 'daily · arrows = strategy signal changes',
+        meta: 'daily',
         tools: h('a', { class: 'btn sm ghost', href: '#/markets' }, 'Open chart'),
       })),
       h('div', { class: 'c4' }, panel('Safety', safety, { tools: h('a', { class: 'btn sm ghost', href: '#/risk' }, 'Details') })),
@@ -182,6 +208,10 @@ export function overview(ctx) {
 
   function renderHero(st) {
     const d = lastDecision;
+    if (d === undefined) {  // first fetch still running: don't flash an empty rail
+      hero.replaceChildren(h('div', { class: 'eyebrow' }, `${st.market.instrument} · daily`), h('h2', null, 'Loading the latest check…'), loading(2));
+      return;
+    }
     const s = story(st, d);
     const b = st.broker;
     hero.replaceChildren(
@@ -193,7 +223,8 @@ export function overview(ctx) {
       h('p', { class: 'why' }, s.why),
       rail(st, d),
       h('div', { class: 'actions' },
-        h('button', { class: 'btn primary', onclick: () => ctx.act('run-once') }, icon('bolt'), 'Run a new check'),
+        h('button', { class: 'btn primary', onclick: (e) => ctx.act('run-once', {}, { button: e.currentTarget }) }, icon('bolt'), 'Run a new check'),
+        st.kill_switch.engaged ? killButton(ctx, true) : null,
         d ? h('a', { class: 'btn ghost', href: `#/agents?decision=${d.id}` }, 'See how it decided') : null,
         h('span', { class: 'small muted' }, 'Checks run when you press this, or on a schedule while `tradeintel service` is running.')));
   }
@@ -209,7 +240,7 @@ export function overview(ctx) {
     for (const p of pos) unreal = q && p.instrument === q.instrument && unreal != null ? unreal + ((q.bid + q.ask) / 2 - p.avg_price) * p.units : null;
     acct.replaceChildren(h('div', { class: 'stack', style: { gap: '14px' } },
       h('div', null, h('div', { class: 'small muted' }, 'Total value'),
-        h('div', { class: 'mono', style: { fontSize: '30px', fontWeight: 500, lineHeight: 1.2 } }, fmt.money(b.equity, '', 2), h('span', { class: 'muted', style: { fontSize: '15px', marginLeft: '6px' } }, b.currency))),
+        h('div', { class: 'mono', style: { fontSize: 'clamp(22px, 2.2vw, 30px)', fontWeight: 500, lineHeight: 1.2 } }, fmt.money(b.equity, '', 2), h('span', { class: 'muted', style: { fontSize: '15px', marginLeft: '6px' } }, b.currency))),
       kv([['Cash', h('span', { class: 'mono' }, fmt.money(b.cash))],
         ['Change today', day == null ? h('span', { class: 'dim', title: 'Starts counting after today’s first check' }, '—') : h('span', { class: `mono ${fmt.tone(day)}` }, fmt.signed(day))],
         ['Open positions', pos.length ? pos.map((p) => `${p.instrument} ${fmt.signed(p.units, 0)}`).join(', ') : 'None'],
@@ -220,7 +251,8 @@ export function overview(ctx) {
 
   function renderAttention(st, events) {
     const now = Date.now();
-    const upcoming = (events || []).filter((e) => e.impact === 'high' && new Date(e.event_time) > now).slice(0, 3);
+    const ccys = relevantCcys(st);
+    const upcoming = (events || []).filter((e) => e.impact === 'high' && ccys.includes(e.currency) && new Date(e.event_time) > now).slice(0, 3);
     const items = st.alerts.filter((a) => a.level !== 'info').map((a) => h('div', { class: `alert-item ${a.level}`, style: { padding: '10px 0' } }, h('div', { class: 'bar' }),
       h('div', null, h('div', { style: { fontWeight: 500 } }, a.title), a.detail ? h('div', { class: 'small muted' }, a.detail) : null)));
     for (const e of upcoming) items.push(h('div', { class: 'alert-item', style: { padding: '10px 0' } }, h('div', { class: 'bar' }),
@@ -242,6 +274,12 @@ export function overview(ctx) {
     renderHero(st); renderAccount(st);
     Promise.all([api.get('/api/decisions?limit=6'), api.get('/api/audit?limit=6'), api.get('/api/risk'), api.get('/api/news')]).then(([ds, au, r, n]) => {
       lastDecision = ds[0] || null;
+      if (lastDecision && store.get('ov.seen') !== lastDecision.id) {  // a check you haven't seen yet: make it visible
+        store.set('ov.seen', lastDecision.id);
+        hero.classList.remove('fresh');
+        void hero.offsetWidth;  // restart the highlight animation
+        hero.classList.add('fresh');
+      }
       renderHero(ctx.state);
       renderRecent(ds, au);
       safety.replaceChildren(riskSummary(r));
@@ -389,10 +427,10 @@ export function execution(ctx) {
           { label: 'Stop', key: 'stop_price', num: true }, { label: 'Status', render: (o) => badge(o.status) }, { label: 'Submitted', render: (o) => when(o.submitted_at) },
         ], b.open_orders, { empty: 'No open orders' }) : emptyState('Not available', `The ${b.broker} broker interface has no order list.`))))),
       panel('Emergency stop', h('div', { class: 'row' },
-        st.kill_switch.engaged ? [badge('on: orders blocked', 'neg'), h('span', null, `${st.kill_switch.reason || ''} · `, when(st.kill_switch.at))] : [badge('off', 'pos'), h('span', { class: 'muted' }, 'Orders can go out only if every safety check passes.')],
+        st.kill_switch.engaged ? [badge('on: orders blocked', 'neg'), h('span', null, `${killReason(st.kill_switch.reason)} · `, when(st.kill_switch.at))] : [badge('off', 'pos'), h('span', { class: 'muted' }, 'Orders can go out only if every safety check passes.')],
         h('span', { style: { flex: 1 } }),
-        h('button', { class: 'btn danger', disabled: st.kill_switch.engaged, onclick: () => ctx.act('kill') }, icon('bolt'), 'Stop all new orders')),
-      { foot: 'Blocks every new order straight away. It doesn\'t sell what you hold or cancel orders already at the broker; do that in the broker\'s own dashboard. To turn it off: `tradeintel risk reset` in a terminal.' }),
+        killButton(ctx, st.kill_switch.engaged)),
+      { foot: 'Blocks every new order straight away. It doesn\'t sell what you hold or cancel orders already at the broker; do that in the broker\'s own dashboard. Turning it off needs you to type RESET.' }),
       h('div', { class: 'grid' },
         h('div', { class: 'c7' }, panel('Orders the AI considered', flush(audSlot), { meta: 'approved or refused, newest first' })),
         h('div', { class: 'c5' }, panel('Order details', detail))));
@@ -441,8 +479,8 @@ export function agents(ctx) {
       'The strategy rule gives a signal, three agents review it, a coordinator decides, then the safety check runs. ',
       'They are fixed rules that run once per check (not chatbots), so there is nothing to start or pause.'),
     h('div', { class: 'row' },
-      h('button', { class: 'btn primary', onclick: () => ctx.act('run-once').then(reload) }, icon('bolt'), 'Run a new check'),
-      h('button', { class: 'btn danger', onclick: () => ctx.act('kill') }, 'Stop all new orders')),
+      h('button', { class: 'btn primary', onclick: (e) => ctx.act('run-once', {}, { button: e.currentTarget }) }, icon('bolt'), 'Run a new check'),
+      killButton(ctx, ctx.state.kill_switch.engaged)),
     h('div', { class: 'grid' },
       h('div', { class: 'c7' }, panel('How a check flows', graphSlot, { meta: 'click a step for details' })),
       h('div', { class: 'c5' }, panel('Step details', nodeSlot))),
@@ -568,9 +606,9 @@ export function risk(ctx) {
     h('div', { class: 'grid' },
       h('div', { class: 'c5' }, panel('Emergency stop', h('div', { class: 'stack' },
         h('div', { class: 'row' }, r.kill_switch.engaged ? badge('on: orders blocked', 'neg') : badge('off', 'pos'),
-          r.kill_switch.engaged ? h('span', null, r.kill_switch.reason, ' · ', when(r.kill_switch.at)) : h('span', { class: 'muted' }, 'Turns on by itself if the account loses too much in a day or from its peak.')),
-        h('div', { class: 'row' }, h('button', { class: 'btn danger', disabled: r.kill_switch.engaged, onclick: () => ctx.act('kill').then(() => load(true)) }, icon('bolt'), 'Stop all new orders')),
-        h('div', { class: 'small muted' }, 'It only blocks new orders; what you hold stays. To turn it off, check why it went on, then run `tradeintel risk reset` in a terminal and type RESET.')))),
+          r.kill_switch.engaged ? h('span', null, killReason(r.kill_switch.reason), ' · ', when(r.kill_switch.at)) : h('span', { class: 'muted' }, 'Turns on by itself if the account loses too much in a day or from its peak.')),
+        h('div', { class: 'row' }, killButton(ctx, r.kill_switch.engaged)),
+        h('div', { class: 'small muted' }, 'It only blocks new orders; what you hold stays. To turn it off, check why it went on first; you\'ll be asked to type RESET.')))),
       h('div', { class: 'c7' }, panel('How close the account is to each limit', h('div', { class: 'stack', style: { gap: '14px' } }, r.utilisation.map(utilRow))))),
     h('div', { class: 'grid' },
       h('div', { class: 'c5' }, panel('The limits', flush(table([{ label: 'Rule', render: (x) => LIMIT_NAMES[x.k]?.[0] || x.k }, { label: 'Setting', num: true, render: (x) => h('span', { class: 'mono' }, (LIMIT_NAMES[x.k]?.[1] || String)(x.v)) }],
@@ -671,11 +709,13 @@ export function research(ctx) {
       m.gate ? h('div', null, h('div', { class: 'small muted' }, 'Promotion gate'), (m.gate.reasons || []).length ? m.gate.reasons.map((x) => h('div', { class: 'small neg' }, '✕ ', x)) : h('div', { class: 'pos small' }, 'All checks passed')) : null));
   }
 
+  let gone = false;
   async function run(kind) {
     const name = strategySel.value;
     runChart?.destroy(); runChart = null;
     runSlot.replaceChildren(h('div', { class: 'row muted' }, h('span', { class: 'typing' }, h('span'), h('span'), h('span')), kind === 'research' ? 'Running walk-forward research…' : 'Running backtest…'));
     const res = await ctx.act(kind, { strategy: name });
+    if (gone) return;  // you left the page while it ran; the toast already showed the result
     if (!res) return runSlot.replaceChildren();
     if (!res.ok) return runSlot.replaceChildren(errorState(res.error));
     if (kind === 'research') { sel = res.experiment_id; load(); return runSlot.replaceChildren(h('div', { class: 'note' }, `Experiment #${res.experiment_id} recorded: ${res.gate.passed ? 'PASSED' : 'rejected'}. See the detail panel.`)); }
@@ -689,28 +729,32 @@ export function research(ctx) {
   }
 
   load();
-  return { el, destroy() { runChart?.destroy(); } };
+  return { el, destroy() { gone = true; runChart?.destroy(); } };
 }
 
 // ============================================================ News & events
 export function news(ctx) {
   const slot = h('div');
+  const ccys = relevantCcys(ctx.state);
+  const allBox = h('input', { type: 'checkbox', checked: store.get('news.all', false), onchange: (e) => { store.set('news.all', e.target.checked); load(); } });
   const load = () => loadInto(slot, (sg) => api.get('/api/news', sg), (n) => h('div', { class: 'grid' },
-    h('div', { class: 'c7' }, panel('Economic calendar', flush(table([
+    h('div', { class: 'c12' }, panel('Economic calendar', flush(table([
       { label: 'Time', render: (e) => when(e.event_time) }, { label: 'Ccy', key: 'currency' },
       { label: 'Impact', render: (e) => badge(e.impact, e.impact === 'high' ? 'neg' : e.impact === 'medium' ? 'warn' : '') },
       { label: 'Event', key: 'title' }, { label: 'Fcst', key: 'forecast' }, { label: 'Prev', key: 'previous' }, { label: 'Actual', key: 'actual' },
-    ], n.events, { empty: 'No events stored for this week yet. Press “Refresh news & calendar”.', maxHeight: '520px' })), { meta: 'times in your local time zone' })),
-    h('div', { class: 'c5' }, h('div', { class: 'stack', style: { gap: '12px' } },
+    ], allBox.checked ? n.events : n.events.filter((e) => ccys.includes(e.currency)), { empty: n.events.length ? `No ${ccys.join('/')} events stored for this week.` : 'No events stored for this week yet. Press “Refresh news & calendar”.', maxHeight: '520px' })),
+      { meta: allBox.checked ? 'all countries · your local time' : `only ${ccys.join(' and ')}, which can move ${ctx.state.market.instrument} · your local time` })),
+    h('div', { class: 'c12' }, h('div', { class: 'grid' }, h('div', { class: 'c5' },
       panel('News sources', flush(table([{ label: 'Source', key: 'source' }, { label: 'Status', render: (x) => (x.ok ? badge('ok', 'pos') : badge('failed', 'neg')) },
         { label: 'Items', key: 'items', num: true, d: 0 }, { label: 'Checked', render: (x) => when(x.at, 'ago') }, { label: 'Error', render: (x) => h('span', { class: 'small muted' }, x.error || '') }],
-      n.health, { empty: 'No fetches recorded yet.' }))),
+      n.health, { empty: 'No fetches recorded yet.' })))), h('div', { class: 'c7' },
       panel('Headlines', flush(table([{ label: 'Ingested', render: (x) => when(x.ingested_at, 'ago') },
         { label: 'Source', render: (x) => badge(x.source, x.reliability === 'official' ? 'info' : '') },
         { label: 'Title', render: (x) => (safeUrl(x.url) ? h('a', { href: safeUrl(x.url), target: '_blank', rel: 'noopener noreferrer' }, x.title) : x.title) }],
-      n.news, { empty: 'No headlines stored yet.', maxHeight: '360px' })), { meta: 'from outside sources' })))));
+      n.news, { empty: 'No headlines stored yet.', maxHeight: '360px' })), { meta: 'from outside sources' }))))));
   const el = h('div', { class: 'stack', style: { gap: '12px' } },
     h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => ctx.act('news-ingest').then(load) }, icon('refresh'), 'Refresh news & calendar'),
+      h('label', { class: 'check' }, allBox, 'Show every country'),
       h('span', { class: 'small muted' }, 'From central-bank news feeds and the Forex Factory calendar (this week only).')), slot);
   load();
   return { el };
@@ -730,7 +774,7 @@ export function activity(ctx) {
   function load() {
     loadInto(slot, (sg) => Promise.all([api.get('/api/decisions?limit=200', sg), api.get('/api/audit?limit=300', sg), api.get('/api/logs?limit=400', sg)]), ([ds, au, lg]) => {
       rows = [
-        ...ds.map((d) => ({ at: d.decided_at, type: 'decision', level: 'INFO', text: `${d.action} · ${d.strategy} · ${d.instrument}: ${(d.reasons || []).join('; ')}`, raw: d })),
+        ...ds.map((d) => ({ at: d.decided_at, type: 'decision', level: 'INFO', text: decisionText(d), raw: d })),
         ...au.map((a) => ({ at: a.at, type: 'order', level: a.risk && !a.risk.approved ? 'WARNING' : 'INFO', text: `${a.order_result?.status || '—'} · ${a.idempotency_key}${a.risk && !a.risk.approved ? ' · ' + (a.risk.reasons || []).join('; ') : ''}`, raw: a })),
         ...lg.lines.map((l) => ({ at: l.ts, type: 'log', level: l.level, text: `${l.logger || ''} ${l.msg}`, raw: l })),
       ].sort((a, b) => ((a.at || '') < (b.at || '') ? 1 : -1));
@@ -778,7 +822,7 @@ export function settings(ctx) {
           ['Close dialogs', h('kbd', null, 'Esc')], ['Toggle sidebar', h('span', null, h('kbd', null, 'Ctrl'), ' ', h('kbd', null, 'B'))]])),
         panel('Risk limits', pre(st.risk), { foot: 'Read-only. Edit config/local.yaml and restart; nothing at runtime writes risk configuration.' }),
         panel('Not available in this build', h('ul', { style: { margin: 0, paddingLeft: '18px' } },
-          ['Enabling execution or live trading from the UI', 'Editing risk limits at runtime', 'Clearing the kill switch (CLI only)', 'Cancelling orders / closing positions',
+          ['Enabling execution or live trading from the UI', 'Editing risk limits at runtime', 'Cancelling orders / closing positions',
             'Human-approval order queue', 'Agent start/pause (agents run inside decision cycles)', 'Custom dashboard layouts', 'Voice input/output'].map((x) => h('li', { class: 'muted' }, x)))),
         panel('About', h('div', { class: 'small muted' }, 'Charts by ', h('a', { href: 'https://www.tradingview.com/', target: '_blank', rel: 'noopener' }, 'TradingView Lightweight Charts™'),
           ' (Apache-2.0, see vendor/lightweight-charts.LICENSE.txt).')))));

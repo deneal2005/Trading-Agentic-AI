@@ -200,7 +200,8 @@ def alerts(s: Settings, br: dict, data: dict, ks: dict) -> list[dict]:
 
     unit = "cents" if s.market.pip_size == 0.01 else "pips"
     if ks["engaged"]:
-        add("danger", f"kill:{ks.get('at')}", "Emergency stop is on: new orders are blocked", f"Reason: {ks.get('reason', '')}", ks.get("at"))
+        why = ks.get("reason", "").replace("ui: engaged from UI", "turned on from this app").removeprefix("ui: ")
+        add("danger", f"kill:{ks.get('at')}", "Emergency stop is on: new orders are blocked", f"Reason: {why}", ks.get("at"))
     if not br.get("available"):
         add("danger", "broker", f"Can't reach the {br.get('broker')} account", br.get("error", ""))
     elif br.get("quote_error"):
@@ -532,6 +533,22 @@ def act_kill(s: Settings, reason: str) -> dict:
     KillSwitch(s.paths.kill_switch_file).engage(f"ui: {reason}")
     return {"ok": True, "kill_switch": kill_switch(s),
             "note": "New orders are blocked. Open positions and resting broker orders are NOT closed or cancelled."}
+
+
+def act_reset_kill(s: Settings, confirm: str) -> dict:
+    """Turn the emergency stop off. Same safeguard as `tradeintel risk reset`: the person types RESET. Audited."""
+    from ..execution.pipeline import ExecutionPipeline
+    from ..service import StateStore
+
+    if confirm != "RESET":
+        return {"ok": False, "error": "type RESET to confirm"}
+    before = kill_switch(s)
+    KillSwitch(s.paths.kill_switch_file).reset()
+    StateStore(s.paths.db_path).set("consecutive_losses", 0)
+    ExecutionPipeline(s.paths.db_path, None, None, False).audit(
+        "manual", f"kill-reset|{_now().isoformat()}", {"action": "emergency stop turned off from the app", "was": before},
+        None, None, {"status": "cleared"})
+    return {"ok": True, "kill_switch": kill_switch(s)}
 
 
 def act_run_once(s: Settings) -> dict:

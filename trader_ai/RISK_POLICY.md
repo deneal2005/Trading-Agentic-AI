@@ -29,7 +29,7 @@ The risk engine (`src/tradeintel/risk/engine.py`) is deterministic and independe
 - File: `var/KILL_SWITCH` (JSON with reason and time). It survives restarts.
 - It engages automatically on a daily-loss or drawdown breach, or manually with `tradeintel risk kill --reason ...`. Every decision cycle checks daily loss and drawdown, whether or not it proposes an order. Day-start equity and the high-water mark are recorded on every cycle. It never closes positions by itself.
 - `ExecutionPipeline.emergency_stop()` engages it and closes all positions.
-- Only a human can clear it, with `tradeintel risk reset`, which requires typing `RESET`. Review the cause first.
+- Only a human can clear it: `tradeintel risk reset`, or the app's "Turn off emergency stop" button. Both require typing `RESET` and also clear the losing-streak pause. The app writes the reset to the audit table. The assistant can only propose it; the same typed confirmation still applies. Review the cause first.
 
 ## Promotion criteria (placeholders until the target market and risk budget are confirmed)
 A strategy may send demo orders only when, for the **exact** instrument, timeframe and parameter set it trades (enforced in `service.strategy_promoted`):

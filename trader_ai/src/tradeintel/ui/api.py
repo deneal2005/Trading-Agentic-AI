@@ -424,7 +424,7 @@ def research_view(s: Settings) -> dict:
     for e in exps:  # the HTML report is overwritten per strategy, so only the newest run links to it
         path = s.paths.reports_dir / f"research_{e['strategy']}.html"
         if e["kind"] == "walkforward" and e["strategy"] not in latest_seen and path.exists():
-            e["report"] = f"/reports/research_{e['strategy']}.html"
+            e["report"] = f"reports/research_{e['strategy']}.html"
         latest_seen.add(e["strategy"])
         e.pop("config_hash", None)
     strategies = []
@@ -647,4 +647,4 @@ def act_research(s: Settings, strategy: str, progress=lambda _: None) -> dict:
         _heavy.release()
     return {"ok": True, "experiment_id": rep.get("experiment_id"), "gate": rep["gate"],
             "oos": {k: _num(rep["oos"][k]) for k in ("sharpe", "net_return", "max_drawdown", "n_trades", "profit_factor")},
-            "report": f"/reports/research_{strategy}.html"}
+            "report": f"reports/research_{strategy}.html"}

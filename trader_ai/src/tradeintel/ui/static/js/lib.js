@@ -141,7 +141,25 @@ export class ApiError extends Error {
   constructor(msg, status) { super(msg); this.status = status; }
 }
 
+// Published snapshot (GitHub Pages): no backend replaced the token, so reads come from files exported by
+// `tradeintel ui-export` and every action is refused. Nothing is ever shown as live.
+export const SNAPSHOT = !TOKEN || TOKEN === '__TI_TOKEN__';
+const SNAPSHOT_MSG = 'This is a read-only snapshot on GitHub Pages. Run `tradeintel ui` on your PC to use the controls.';
+
+function snapshotFile(path) {
+  const [p, qs] = path.split('?');
+  const q = new URLSearchParams(qs || '');
+  const name = p.replace(/^\/api\//, '').replace(/\//g, '_');
+  return name === 'bars' ? `api/bars_${q.get('instrument') || 'default'}_${q.get('limit') || '500'}.json` : `api/${name}.json`;
+}
+
 async function req(method, path, body, signal) {
+  if (SNAPSHOT) {
+    if (method !== 'GET') throw new ApiError(SNAPSHOT_MSG, 0);
+    const r = await fetch(snapshotFile(path), { signal });
+    if (!r.ok) throw new ApiError('Not included in this snapshot.', r.status);
+    return r.json();
+  }
   let r;
   try {
     r = await fetch(path, {

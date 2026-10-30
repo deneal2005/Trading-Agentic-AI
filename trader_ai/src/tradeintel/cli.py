@@ -277,6 +277,11 @@ def cmd_ui(s, a):
     serve(s, a.port, not a.no_browser)
 
 
+def cmd_ui_export(s, a):
+    from .ui.server import export_site
+    _print(export_site(s, a.out))
+
+
 def cmd_experiments(s, a):
     from .experiments.registry import Registry
     rows = Registry(s.paths.db_path).list(a.limit)
@@ -338,6 +343,8 @@ def build_parser() -> argparse.ArgumentParser:
     ui = sub.add_parser("ui", help="open the Trading OS dashboard and companion (local web app)")
     ui.add_argument("--port", type=int, default=8765); ui.add_argument("--no-browser", action="store_true")
     ui.set_defaults(fn=cmd_ui)
+    ue = sub.add_parser("ui-export", help="write a read-only snapshot of the dashboard for GitHub Pages")
+    ue.add_argument("--out", type=Path, default=PROJECT_ROOT.parent / "docs"); ue.set_defaults(fn=cmd_ui_export)
     ex = sub.add_parser("experiments", help="list recorded experiments"); ex.add_argument("--limit", type=int, default=20)
     ex.set_defaults(fn=cmd_experiments)
     return p

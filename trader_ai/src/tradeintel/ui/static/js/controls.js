@@ -1,7 +1,7 @@
 // One status model for every trading process, derived only from the polled backend state
 // (/api/state), the job table (/api/activity) and requests still in flight. Every control that
 // starts or stops something renders from it, so all screens always agree.
-import { h, fmt, icon } from './lib.js';
+import { h, fmt, icon, SNAPSHOT } from './lib.js';
 import { stepLine, jobOutcome } from './activity.js';
 
 // app.js fills this in; `pending` maps action name -> request start (ms) until the backend confirms it
@@ -19,7 +19,8 @@ export function deriveStatus(x = hub, now = Date.now()) {
   const out = {};
   const ago = fmt.ago(x.stateAt || null);
 
-  if (!st && !x.error) out.conn = { key: 'connecting', label: 'Connecting…', tone: 'accent', busy: true, sub: 'Waiting for the first reply from the app backend' };
+  if (SNAPSHOT && st) out.conn = { key: 'snapshot', label: 'Snapshot', tone: 'warn', sub: `Recorded ${fmt.time(st.server_time)} · read-only, not live` };
+  else if (!st && !x.error) out.conn = { key: 'connecting', label: 'Connecting…', tone: 'accent', busy: true, sub: 'Waiting for the first reply from the app backend' };
   else if (offline) out.conn = { key: 'offline', label: 'Disconnected', tone: 'neg', sub: `App backend unreachable${st ? ` · last data ${ago}` : ''}. Retrying…` };
   else if (now - x.stateAt > STALE_MS) out.conn = { key: 'stale', label: 'Stale', tone: 'warn', sub: `No fresh data since ${ago}` };
   else if (!st.broker.available) out.conn = { key: 'broker', label: 'Broker offline', tone: 'neg', sub: st.broker.error || 'Account can’t be read' };
@@ -91,6 +92,7 @@ function liveButton(spec, { sm = false } = {}) {
   b.addEventListener('click', () => { if (cur?.run && !b.disabled) cur.run(); });
   return onStatus(b, () => {
     cur = spec(deriveStatus());
+    if (SNAPSHOT) cur = { ...cur, busy: false, disabled: true, title: 'Read-only snapshot: run `tradeintel ui` on your PC to use this' };
     b.className = `btn ${sm ? 'sm ' : ''}${cur.cls || ''}`;
     b.disabled = !!cur.disabled;
     b.title = cur.title || '';

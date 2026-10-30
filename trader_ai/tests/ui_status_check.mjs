@@ -1,7 +1,8 @@
 // self-check for controls.deriveStatus with a stubbed DOM
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
-globalThis.document = { querySelector: () => null, createElement: () => ({}), addEventListener() {}, dispatchEvent() {} };
+// a live page: the server filled in the token (no token = published snapshot mode)
+globalThis.document = { querySelector: () => ({ content: 'test-token' }), createElement: () => ({}), addEventListener() {}, dispatchEvent() {} };
 globalThis.matchMedia = () => ({ matches: true });
 globalThis.Event = class {};
 const { deriveStatus } = await import(pathToFileURL(process.argv[2]).href);

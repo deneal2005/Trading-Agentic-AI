@@ -1,5 +1,5 @@
 // Application shell: header navigation, system status strip, routing, command palette, alerts, actions.
-import { h, api, fmt, icon, badge, confirmDialog, toast, errorState, store } from './lib.js';
+import { h, api, fmt, icon, badge, confirmDialog, toast, errorState, store, SNAPSHOT } from './lib.js';
 import * as pages from './pages.js';
 import { createCompanion } from './companion.js';
 import { createActivity, stepLine } from './activity.js';
@@ -174,6 +174,9 @@ function buildShell() {
         h('button', { class: 'hbtn', onclick: openPalette, title: 'Search and commands (Ctrl+K)', 'aria-label': 'Search and commands' }, icon('search')),
         h('button', { class: 'hbtn', onclick: () => companion.toggle(), title: 'Ask the assistant (Ctrl+.)', 'aria-label': 'Ask the assistant' }, icon('send')),
         themeBtn)),
+    SNAPSHOT ? h('div', { class: 'snapshot-banner', role: 'note' }, h('b', null, 'Read-only snapshot, not live. '),
+      'Account, prices and decisions are as recorded when this page was published; controls are switched off. ',
+      h('a', { href: 'https://github.com/deneal2005/Trading-Agentic-AI', target: '_blank', rel: 'noopener' }, 'Run it yourself →')) : null,
     statusStrip(),
     activity.drop,
     content);

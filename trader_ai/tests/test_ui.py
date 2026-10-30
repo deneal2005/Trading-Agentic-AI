@@ -255,3 +255,15 @@ def test_ui_status_model_reflects_real_state():
     js = here.parent / "src" / "tradeintel" / "ui" / "static" / "js" / "controls.js"
     r = subprocess.run([node, str(here / "ui_status_check.mjs"), str(js)], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
+
+
+def test_snapshot_export_has_no_token_local_paths_or_account_id(settings, tmp_path):
+    from tradeintel.ui.server import export_site
+    site = tmp_path / "site"
+    res = export_site(settings, site)
+    assert "__TI_TOKEN__" in (site / "index.html").read_text(encoding="utf-8")  # no token: the page runs in snapshot mode
+    st = json.loads((site / "api" / "state.json").read_text(encoding="utf-8"))
+    assert st["broker"]["account"] == "paper" and res["written"] > 10
+    local = str(settings.paths.data_dir.parent).replace("\\", "\\\\")  # as it would appear inside JSON
+    for f in (site / "api").glob("*.json"):
+        assert local not in f.read_text(encoding="utf-8"), f.name

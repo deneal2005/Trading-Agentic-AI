@@ -239,6 +239,46 @@ def make_handler(app: App):
     return Handler
 
 
+def export_site(s: Settings, out: Path) -> dict:
+    """A read-only snapshot for static hosting (GitHub Pages): the app's files plus each GET view as JSON, read by
+    the page's snapshot mode. Local file paths are dropped, the account id is masked and the log file is left out."""
+    import shutil
+
+    out = Path(out)
+    shutil.copytree(STATIC, out, dirs_exist_ok=True)
+    shutil.rmtree(out / "api", ignore_errors=True)  # only our own data folder is replaced
+    (out / "api").mkdir()
+    (out / ".nojekyll").write_text("", encoding="utf-8")
+    cache = api.BrokerCache(s)
+    st = api.state(s, cache)
+    if st["broker"].get("account"):
+        st["broker"]["account"] = "paper"
+    cfg = api.config_view(s)
+    cfg["settings"].pop("paths", None)
+    views = {
+        "state": lambda: st, "watchlist": lambda: api.watchlist(s, cache), "decisions": lambda: api.decisions_view(s, 200),
+        "audit": lambda: api.audit_rows(s, 300), "agents": lambda: api.agents_view(s), "risk": lambda: api.risk_view(s, cache),
+        "research": lambda: api.research_view(s), "news": lambda: api.news_view(s), "activity": lambda: api.activity(s),
+        "jobs": lambda: [api._slim(j) for j in JobStore(s.paths.db_path).recent(200)], "brain": lambda: api.brain_view(s, 120),
+        "config": lambda: cfg, "logs": lambda: {"available": False, "path": "not included in the published snapshot", "lines": []},
+    }
+    for n in (21, 63, 126, 252, 1260, 0):  # the chart ranges the pages ask for
+        views[f"bars_default_{n}"] = views[f"bars_{s.market.instrument}_{n}"] = \
+            lambda n=n: api.bars_view(s, s.market.instrument, s.market.timeframe, n, cache)
+    written, skipped = [], {}
+    for name, fn in views.items():
+        try:
+            data = json.dumps(finite(fn()), default=str, allow_nan=False)
+        except Exception as e:  # e.g. no trained model: the page shows "not included in this snapshot"
+            skipped[name] = f"{type(e).__name__}: {e}"
+            continue
+        (out / "api" / f"{name}.json").write_text(data, encoding="utf-8")
+        written.append(name)
+    if s.paths.reports_dir.exists():
+        shutil.copytree(s.paths.reports_dir, out / "reports", dirs_exist_ok=True)
+    return {"out": str(out), "recorded_at": st["server_time"], "written": len(written), "skipped": skipped}
+
+
 def serve(s: Settings, port: int = 8765, open_browser: bool = True) -> None:
     app = App(s, port)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))

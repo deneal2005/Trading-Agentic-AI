@@ -1,7 +1,7 @@
 // 3D view of the trained neural network (direction_mlp): real weights and real
 // activations from /api/brain. Node positions are layout only; everything that
 // lights up is a value the network actually computed.
-import * as THREE from '/vendor/three.module.min.js';
+import * as THREE from '../vendor/three.module.min.js';
 import { h, api, fmt, panel, badge, kv, emptyState, errorState, loading, store, reducedMotion } from './lib.js';
 
 const LABELS = {

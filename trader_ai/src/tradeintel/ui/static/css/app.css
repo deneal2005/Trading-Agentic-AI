@@ -7,11 +7,11 @@
    charts draw left to right. All of it is off for prefers-reduced-motion.
    A dark theme ([data-theme="dark"]) uses the same tokens. */
 
-@font-face { font-family: "Plex Sans"; src: url("/fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
-@font-face { font-family: "Plex Sans"; src: url("/fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2"); font-weight: 500; font-display: swap; }
-@font-face { font-family: "Plex Sans"; src: url("/fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2"); font-weight: 600; font-display: swap; }
-@font-face { font-family: "Plex Mono"; src: url("/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
-@font-face { font-family: "Plex Mono"; src: url("/fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Plex Sans"; src: url("../fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Plex Sans"; src: url("../fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Plex Sans"; src: url("../fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "Plex Mono"; src: url("../fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Plex Mono"; src: url("../fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2"); font-weight: 500; font-display: swap; }
 
 :root {
   /* surfaces */
@@ -188,6 +188,9 @@ a:hover { text-decoration: underline; }
 .hbtn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pos); }
 .hbtn.warn .dot { background: var(--warn); }
 .hbtn.bad .dot { background: var(--neg); }
+
+.snapshot-banner { flex: none; margin: 0 16px 10px; padding: 9px 14px; border-radius: var(--r); background: var(--warn-bg); color: var(--text-2); font-size: 13px; }
+.snapshot-banner b { color: var(--warn-text); }
 
 /* ============================================================ system status strip (the single source of "what is running") */
 .strip {

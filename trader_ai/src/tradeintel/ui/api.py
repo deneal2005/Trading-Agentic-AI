@@ -561,19 +561,13 @@ def act_kill(s: Settings, reason: str) -> dict:
 
 
 def act_reset_kill(s: Settings, confirm: str) -> dict:
-    """Turn the emergency stop off. Same safeguard as `tradeintel risk reset`: the person types RESET. Audited."""
-    from ..execution.pipeline import ExecutionPipeline
-    from ..service import StateStore
+    """Turn the emergency stop off. Same safeguard and code as `tradeintel risk reset`: the person types RESET. Audited."""
+    from ..service import release_kill_switch
 
     if confirm != "RESET":
         return {"ok": False, "error": "type RESET to confirm"}
-    before = kill_switch(s)
-    KillSwitch(s.paths.kill_switch_file).reset()
-    StateStore(s.paths.db_path).set("consecutive_losses", 0)
-    ExecutionPipeline(s.paths.db_path, None, None, False).audit(
-        "manual", f"kill-reset|{_now().isoformat()}", {"action": "emergency stop turned off from the app", "was": before},
-        None, None, {"status": "cleared"})
-    return {"ok": True, "kill_switch": kill_switch(s)}
+    refused = release_kill_switch(s, "the app")
+    return {"ok": False, "error": refused} if refused else {"ok": True, "kill_switch": kill_switch(s)}
 
 
 def act_run_once(s: Settings, progress=lambda _: None) -> dict:

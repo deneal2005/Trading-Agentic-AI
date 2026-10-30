@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 import pandas as pd
 
 from ..config import Settings
@@ -14,7 +15,7 @@ from ..experiments.promotion import evaluate_promotion
 from ..experiments.registry import Registry
 from ..strategies.library import build
 from .engine import EngineParams
-from .metrics import compute_metrics, metrics_by_regime, regime_labels
+from .metrics import compute_metrics, deflated_sharpe, metrics_by_regime, regime_labels
 from .walkforward import oos_as_result, split_holdout, walk_forward
 
 log = logging.getLogger(__name__)
@@ -60,7 +61,14 @@ def research(s: Settings, bars: pd.DataFrame, strategy_name: str, params: dict |
         baselines[b] = compute_metrics(oos_as_result(bwf, ep, s.costs), tf)
 
     by_regime = metrics_by_regime(oos_as_result(wf, ep, s.costs), regime_labels(research_bars), tf)
-    gate = evaluate_promotion(oos, baselines, stressed, s.promotion, synthetic)
+    # deflated Sharpe: every earlier research run of this strategy was another chance to find a lucky setting
+    prior = sum(1 for e in registry.list(100_000) if e["kind"] == "walkforward" and e["strategy"] == strategy_name) if registry else 0
+    n_dsr = wf.meta["n_configs"] * (prior + 1)
+    # spread between the variations on the same data, averaged over folds (not across time, which isn't selection luck)
+    spreads = [np.var(np.asarray(f) / np.sqrt(wf.meta["ppy"]), ddof=1) for f in wf.meta["trial_sharpes"] if len(f) > 1]
+    var = float(np.mean(spreads)) if spreads else 0.0
+    dsr = {"value": deflated_sharpe(wf.oos_equity.pct_change().dropna().to_numpy(), n_dsr, var), "n_trials": n_dsr}
+    gate = evaluate_promotion(oos, baselines, stressed, s.promotion, synthetic, dsr)
 
     report = {
         "strategy": strategy_name,
@@ -76,6 +84,7 @@ def research(s: Settings, bars: pd.DataFrame, strategy_name: str, params: dict |
                    "is_sharpe": f.is_sharpe, "oos_return": float(f.oos.equity.iloc[-1] / f.oos.equity.iloc[0] - 1)}
                   for f in wf.folds],
         "oos": oos,
+        "deflated_sharpe": dsr,
         "cost_stress": {"multiplier": k, **stressed},
         "baselines": baselines,
         "by_regime": by_regime,

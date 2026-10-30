@@ -16,7 +16,7 @@ class GateResult:
 
 
 def evaluate_promotion(oos: dict, baselines: dict[str, dict], stressed: dict | None, cfg: PromotionCfg,
-                       data_is_synthetic: bool) -> GateResult:
+                       data_is_synthetic: bool, dsr: dict | None = None) -> GateResult:
     checks: dict[str, bool] = {}
     reasons: list[str] = []
 
@@ -45,4 +45,8 @@ def evaluate_promotion(oos: dict, baselines: dict[str, dict], stressed: dict | N
               f"unprofitable at {cfg.max_cost_stress_multiplier_loss}x costs (net {stressed['net_return']:.1%})")
     else:
         check("cost_stress", False, "cost stress test not run")
+    if dsr is not None:  # dsr = {"value": probability, "n_trials": variations ever tried}
+        p = dsr["value"]
+        check("deflated_sharpe", p == p and p >= cfg.min_deflated_sharpe,
+              f"deflated Sharpe {p:.2f} < {cfg.min_deflated_sharpe}: after {dsr['n_trials']} variations tried, the result may be luck")
     return GateResult(all(checks.values()), reasons, checks)

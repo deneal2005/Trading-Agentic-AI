@@ -121,6 +121,7 @@ class PromotionCfg(BaseModel):
     min_profit_factor: float
     must_beat_baselines: list[str]
     max_cost_stress_multiplier_loss: float
+    min_deflated_sharpe: float = 0.95  # chance the true Sharpe > 0 after correcting for every variation tried
 
 
 class ExecutionCfg(BaseModel):

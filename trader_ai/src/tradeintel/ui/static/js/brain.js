@@ -8,6 +8,8 @@ const LABELS = {
   r1: '1-day return', r5: '5-day return', r20: '20-day return', vol20: '20-day volatility', rsi14: 'RSI 14',
   dist_sma50: 'vs SMA 50', atr_pct: 'ATR %', mom_126: '6-month momentum', mom_252_21: '12-month momentum',
   dist_sma200: 'vs SMA 200', vol_ratio: 'volatility regime', tom: 'turn of month',
+  macd_hist: 'MACD histogram', bb_width: 'Bollinger width', bb_squeeze: 'Bollinger squeeze', close_loc: 'close in range',
+  body_pct: 'candle body', range_pct: 'candle range',
 };
 const RESEARCH = new Set(['mom_126', 'mom_252_21', 'dist_sma200', 'vol_ratio', 'tom']);
 const STEM = ['market', 'news', 'quant', 'adversarial', 'coordinator', 'risk', 'execution'];

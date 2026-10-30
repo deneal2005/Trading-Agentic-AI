@@ -44,14 +44,14 @@ for cut in (400, 800, 1100):
     common = a.index.intersection(b.index)
     if not np.allclose(a.loc[common].to_numpy(), b.loc[common].to_numpy(), equal_nan=True):
         ok = False
-rec("M1", "PASS" if ok else "FAIL", "Features at t use only bars <= t (truncation test, 12 features)",
+rec("M1", "PASS" if ok else "FAIL", f"Features at t use only bars <= t (truncation test, {len(FEATURES)} features)",
     f"features recomputed on truncated history (cuts 400/800/1100) identical on overlapping rows: {ok}")
 y_ok = bool((full["y"].iloc[:-1] == (synth["close"].shift(-1) > synth["close"]).astype(float).iloc[:-1]).all()) and pd.isna(full["y"].iloc[-1])
 rec("M2", "PASS" if y_ok else "FAIL", "Label y_t = 1 if close[t+1] > close[t]; last row unlabeled", f"matches definition: {y_ok}")
 X = make_features(synth).dropna()
-rec("M3", "FAIL", "Walk-forward has no purge gap between train and test",
-    f"last training row {X.index[299].date()} has a label built from the close of {X.index[300].date()}, the first test row "
-    "(1-bar label overlap; small but real leakage).")
+rec("M3", "PASS", "Walk-forward purges one row between train and test",
+    f"last training row {X.index[299].date()} has a label built from the close of {X.index[300].date()}; "
+    f"that row is skipped, so the first test row is {X.index[301].date()}.")
 
 # ---------------- DATA (real DB, read-only)
 s_real = load_settings()

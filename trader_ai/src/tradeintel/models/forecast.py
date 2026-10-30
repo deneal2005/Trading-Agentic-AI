@@ -21,13 +21,16 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from ..strategies.indicators import atr, rsi, sma
+from ..strategies.indicators import atr, ema, rsi, sma
 
 BASE_FEATURES = ["r1", "r5", "r20", "vol20", "rsi14", "dist_sma50", "atr_pct"]
 # from the research strategies (knowledge/strategies): 6/12-month momentum, 200-day trend,
 # volatility regime (Moreira & Muir), turn-of-month window
 RESEARCH_FEATURES = ["mom_126", "mom_252_21", "dist_sma200", "vol_ratio", "tom"]
-FEATURES = BASE_FEATURES + RESEARCH_FEATURES
+# from the imported day-trading bot (knowledge/research/day_trading_bot_import.md): candle shape,
+# MACD momentum and Bollinger squeeze, all scale-free so they transfer across instruments
+CANDLE_FEATURES = ["macd_hist", "bb_width", "bb_squeeze", "close_loc", "body_pct", "range_pct"]
+FEATURES = BASE_FEATURES + RESEARCH_FEATURES + CANDLE_FEATURES
 
 
 def make_features(bars: pd.DataFrame) -> pd.DataFrame:
@@ -49,6 +52,15 @@ def make_features(bars: pd.DataFrame) -> pd.DataFrame:
     X["dist_sma200"] = c / sma(c, 200) - 1
     X["vol_ratio"] = X["vol20"] / lr.rolling(120).std()
     X["tom"] = TurnOfMonth().signals(bars)["target"].astype(float)  # 1 = next bar is in the window
+    macd = ema(c, 12) - ema(c, 26)
+    X["macd_hist"] = (macd - ema(macd, 9)) / c
+    mid, sd = c.rolling(20).mean(), c.rolling(20).std(ddof=0)
+    X["bb_width"] = 4 * sd / mid
+    X["bb_squeeze"] = X["bb_width"].rolling(100).rank(pct=True)  # low = squeeze
+    rng = bars["high"] - bars["low"]
+    X["close_loc"] = ((c - bars["low"]) / rng.where(rng > 0)).fillna(0.5)
+    X["body_pct"] = c / bars["open"] - 1
+    X["range_pct"] = rng / c
     X["y"] = (c.shift(-1) > c).astype(float).where(c.shift(-1).notna())
     return X
 
@@ -88,9 +100,10 @@ def walk_forward_eval(bars: pd.DataFrame, train_bars: int = 750, test_bars: int 
     X = make_features(bars).dropna()
     preds, ys, prior_p, persist_p = [], [], [], []
     start, folds, model = 0, 0, None
-    while start + train_bars + test_bars <= len(X):
+    purge = 1  # label horizon: the last training label uses the next close, so skip that row before testing
+    while start + train_bars + purge + test_bars <= len(X):
         tr = X.iloc[start:start + train_bars]
-        te = X.iloc[start + train_bars:start + train_bars + test_bars]
+        te = X.iloc[start + train_bars + purge:start + train_bars + purge + test_bars]
         model = make_model(kind, C)
         model.fit(tr[features], tr["y"])
         preds.append(model.predict_proba(te[features])[:, 1])

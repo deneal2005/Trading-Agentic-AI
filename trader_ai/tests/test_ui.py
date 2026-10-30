@@ -267,3 +267,24 @@ def test_snapshot_export_has_no_token_local_paths_or_account_id(settings, tmp_pa
     local = str(settings.paths.data_dir.parent).replace("\\", "\\\\")  # as it would appear inside JSON
     for f in (site / "api").glob("*.json"):
         assert local not in f.read_text(encoding="utf-8"), f.name
+
+
+def test_track_record_scores_each_bar_once_against_what_happened_next():
+    import pandas as pd
+    idx = pd.date_range("2026-01-01", periods=8, freq="D", tz="UTC")
+    closes = pd.Series([100, 101, 102, 103, 99, 98, 97, 96], index=idx, dtype=float)
+
+    def d(at, bar, action, stance):
+        return {"decided_at": at, "action": action, "inputs": {"last_bar": bar.isoformat()},
+                "reports": [{"agent": "market", "stance": stance}]}
+    rec = api.track_record([
+        d("2026-01-01T21:00", idx[0], "abstain", "long"),     # replaced by the later check on the same bar
+        d("2026-01-01T22:00", idx[0], "enter_long", "long"),  # long, and the price rose: signal right
+        d("2026-01-04T22:00", idx[3], "abstain", "long"),     # signal long, price then fell: holding back was right
+        d("2026-01-07T22:00", idx[6], "abstain", "short"),    # 1 day later is known, 2 days isn't yet: pending
+    ], closes, horizons=(1, 2))
+    assert rec["checks"] == 3 and rec["pending"] == 1
+    moves = [101 / 100 - 1, 99 / 103 - 1, -(96 / 97 - 1)]  # each in the signal's direction
+    assert rec["signal"][1] == {"n": 3, "hit_rate": pytest.approx(2 / 3), "avg_move": pytest.approx(sum(moves) / 3)}
+    hb = rec["held_back"][2]
+    assert hb["n"] == 1 and hb["right_rate"] == 1.0 and hb["avg_avoided"] == pytest.approx(1 - 98 / 103)

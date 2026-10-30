@@ -679,6 +679,7 @@ export function agents(ctx) {
   const listSlot = h('div');
   const traceSlot = h('div');
   const modelSlot = h('div');
+  const trackSlot = h('div');
   let data = null;
   let selNode = 'coordinator';
   let selDecision = ctx.params.decision ? Number(ctx.params.decision) : null;
@@ -697,9 +698,31 @@ export function agents(ctx) {
     h('div', { class: 'grid' },
       h('div', { class: 'c5' }, panel('Past checks', flush(listSlot), { meta: 'newest first' })),
       h('div', { class: 'c7' }, panel('Step by step', traceSlot, { meta: 'only what was recorded' }))),
+    panel('Track record: was the AI right?', trackSlot, { meta: 'each check scored against what the price did next' }),
     panel('AI models and knowledge base', modelSlot));
 
+  // Every recorded check vs the real outcome: the signal's hit rate, and whether holding back paid off.
+  function trackRecord(t) {
+    if (t.error) return emptyState('No price data to score against', t.error);
+    const scored = t.horizons.some((hz) => t.signal[hz]?.n);
+    if (!scored) return emptyState('Not enough history yet', `${t.checks} checked day(s) recorded; ${t.pending} still waiting for the next ${Math.max(...t.horizons)} trading days of prices before they can be scored.`);
+    const pctOr = (v, n) => (v == null ? h('span', { class: 'dim' }, '—') : h('span', { class: `mono ${fmt.tone(v)}` }, fmt.pct(v, n, true)));
+    const rate = (v, n) => (v == null ? h('span', { class: 'dim' }, '—') : h('span', { class: 'mono' }, `${fmt.pct(v, 0)} `, h('span', { class: 'dim' }, `of ${n}`)));
+    const small = Math.max(...t.horizons.map((hz) => t.signal[hz].n)) < 30;
+    return h('div', { class: 'stack' },
+      table([
+        { label: 'After', render: (r) => `${r.hz} trading day${r.hz === 1 ? '' : 's'}` },
+        { label: 'Signal right', num: true, render: (r) => rate(t.signal[r.hz].hit_rate, t.signal[r.hz].n) },
+        { label: 'Avg move with signal', num: true, render: (r) => pctOr(t.signal[r.hz].avg_move, 2) },
+        { label: 'Holding back was right', num: true, render: (r) => rate(t.held_back[r.hz].right_rate, t.held_back[r.hz].n) },
+        { label: 'Avg loss avoided by holding back', num: true, render: (r) => pctOr(t.held_back[r.hz].avg_avoided, 2) },
+      ], t.horizons.map((hz) => ({ hz }))),
+      small ? h('div', { class: 'note warn small' }, 'Fewer than 30 scored days: far too few to judge the AI yet. This fills in as checks run.') : null,
+      h('div', { class: 'small muted' }, `${t.checks} checked days · ${t.pending} waiting for later prices · one score per day (the latest check). Past calls only, not a forecast.`));
+  }
+
   function reload() {
+    loadInto(trackSlot, (sg) => api.get('/api/outcomes', sg), trackRecord);
     loadInto(graphSlot, (sg) => api.get('/api/agents', sg), (d) => {
       data = d;
       renderNode();

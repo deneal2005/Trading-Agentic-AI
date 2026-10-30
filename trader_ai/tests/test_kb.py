@@ -16,7 +16,7 @@ def test_cards_and_concepts_searchable(tmp_path):
 
 def test_platform_research_is_searchable_with_its_trust_level(tmp_path):
     kb = KnowledgeBase(tmp_path / "db.sqlite")
-    assert ingest_markdown_dir(kb, PROJECT_ROOT / "knowledge/research", source="platform_research_2026_10") == 8
+    assert ingest_markdown_dir(kb, PROJECT_ROOT / "knowledge/research", source="platform_research_2026_10") == 9
     hits = kb.search("deflated sharpe trials")
     assert hits and all(h.evidence_level in ("research_finding", "hypothesis", "unverified_claim") for h in hits)
 

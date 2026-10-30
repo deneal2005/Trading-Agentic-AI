@@ -16,6 +16,7 @@ import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
+import numpy as np
 import pandas as pd
 
 from ..agents import coordinator as agents
@@ -360,6 +361,41 @@ def agents_view(s: Settings) -> dict:
     return {"nodes": nodes, "edges": edges, "decision_actions": actions, "decisions_counted": len(rows),
             "version": code_version(), "models": models, "knowledge_base": kb,
             "not_recorded": ["per-agent execution time", "tool-call traces", "LLM reasoning (agents are rule-based)"]}
+
+
+def track_record(decisions: list[dict], closes: pd.Series, horizons=(1, 5)) -> dict:
+    """Was the AI right? Each recorded check is scored against what the price did next (one per bar: the latest
+    check on it). 'signal' scores the strategy's call; 'held_back' scores the times the AI vetoed that call."""
+    latest = {}
+    for d in sorted(decisions, key=lambda d: d["decided_at"]):  # a later check on the same bar replaces earlier ones
+        lb = (d.get("inputs") or {}).get("last_bar")
+        if lb:
+            latest[lb] = d
+    pos = {ts: i for i, ts in enumerate(closes.index)}
+    rows, pending = [], 0
+    for lb, d in sorted(latest.items()):
+        stance = next((r["stance"] for r in d.get("reports") or [] if r["agent"] == "market"), None)
+        i = pos.get(pd.Timestamp(lb))
+        fwd = {h: float(closes.iloc[i + h] / closes.iloc[i] - 1) for h in horizons if i is not None and i + h < len(closes)}
+        pending += len(fwd) < len(horizons)
+        rows.append({"bar": lb, "decided_at": d["decided_at"], "action": d["action"], "signal": stance,
+                     "side": {"long": 1, "short": -1}.get(stance), "fwd": fwd})
+    out = {"horizons": list(horizons), "checks": len(rows), "pending": pending, "rows": rows[-50:], "signal": {}, "held_back": {}}
+    for h in horizons:
+        sig = [r["side"] * r["fwd"][h] for r in rows if r["side"] and h in r["fwd"]]
+        out["signal"][h] = {"n": len(sig), "hit_rate": float(np.mean([x > 0 for x in sig])) if sig else None,
+                            "avg_move": float(np.mean(sig)) if sig else None}
+        held = [r["side"] * r["fwd"][h] for r in rows if r["side"] and r["action"] == "abstain" and h in r["fwd"]]
+        out["held_back"][h] = {"n": len(held), "right_rate": float(np.mean([x <= 0 for x in held])) if held else None,
+                               "avg_avoided": -float(np.mean(held)) if held else None}  # > 0: holding back saved money
+    return out
+
+
+def outcomes_view(s: Settings) -> dict:
+    bars, err = _bars(s)
+    if err or bars.empty:
+        return {"horizons": [1, 5], "checks": 0, "pending": 0, "rows": [], "signal": {}, "held_back": {}, "error": err or "no stored bars"}
+    return track_record(decision_rows(s, 5000), bars["close"])
 
 
 def decisions_view(s: Settings, limit: int) -> list[dict]:

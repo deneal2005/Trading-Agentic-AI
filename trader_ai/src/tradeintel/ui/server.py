@@ -104,6 +104,8 @@ class App:
             if not job:
                 raise KeyError(path)
             return job
+        if path == "/api/outcomes":
+            return api.outcomes_view(s)
         if path == "/api/brain":
             return api.brain_view(s, max(1, min(int(one("history", "120")), 1000)))
         raise KeyError(path)
@@ -260,7 +262,7 @@ def export_site(s: Settings, out: Path) -> dict:
         "audit": lambda: api.audit_rows(s, 300), "agents": lambda: api.agents_view(s), "risk": lambda: api.risk_view(s, cache),
         "research": lambda: api.research_view(s), "news": lambda: api.news_view(s), "activity": lambda: api.activity(s),
         "jobs": lambda: [api._slim(j) for j in JobStore(s.paths.db_path).recent(200)], "brain": lambda: api.brain_view(s, 120),
-        "config": lambda: cfg, "logs": lambda: {"available": False, "path": "not included in the published snapshot", "lines": []},
+        "config": lambda: cfg, "outcomes": lambda: api.outcomes_view(s), "logs": lambda: {"available": False, "path": "not included in the published snapshot", "lines": []},
     }
     for n in (21, 63, 126, 252, 1260, 0):  # the chart ranges the pages ask for
         views[f"bars_default_{n}"] = views[f"bars_{s.market.instrument}_{n}"] = \

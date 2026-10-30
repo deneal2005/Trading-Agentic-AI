@@ -238,6 +238,15 @@ function toggleAlerts() {
   document.body.append(dropEl);
 }
 document.addEventListener('click', () => { if (dropEl) { dropEl.remove(); dropEl = null; } });
+// click ripple on buttons; removed by timer because reduced motion cancels the animation
+document.addEventListener('pointerdown', (e) => {
+  const b = e.target.closest?.('.btn');
+  if (!b || b.disabled) return;
+  const r = b.getBoundingClientRect(), d = Math.max(r.width, r.height) * 2;
+  const s = h('span', { class: 'ripple', style: { width: `${d}px`, height: `${d}px`, left: `${e.clientX - r.left - d / 2}px`, top: `${e.clientY - r.top - d / 2}px` } });
+  b.append(s);
+  setTimeout(() => s.remove(), 600);
+});
 
 // ------------------------------------------------------------ routing
 function parseRoute() {
@@ -256,13 +265,16 @@ function mount() {
   const siblings = NAV.find(([sec]) => sec === pg.sec)[3];
   const hr = new Date().getHours();
   const title = pg.id === 'overview' ? `Good ${hr < 12 ? 'morning' : hr < 18 ? 'afternoon' : 'evening'}` : pg.name;
-  const head = h('div', { class: 'page-head' }, h('div', null, h('h1', null, title), pg.intro ? h('p', null, pg.intro) : null),
+  const letters = [...title].map((c, i) => h('span', { 'aria-hidden': 'true', style: { animationDelay: `${i * 22 + 60}ms` } }, c));
+  const head = h('div', { class: 'page-head' }, h('div', null, h('h1', { 'aria-label': title }, letters), pg.intro ? h('p', null, pg.intro) : null),
     siblings.length > 1 ? h('nav', { class: 'subnav', 'aria-label': 'Section pages' }, siblings.map(([id, name]) => h('a', { href: `#/${id}`, class: id === pg.id ? 'on' : '', 'aria-current': id === pg.id ? 'page' : null }, name))) : null);
   try {
     // ctx.state is a getter so pages always read the latest polled state
     app.page = pages[app.route.id]({ get state() { return hub.state; }, params: app.route.params, act, companion, go: (hash) => { location.hash = hash; } });
     const pageEl = h('div', { class: 'page entering' }, head, app.page.el);
-    content.replaceChildren(pageEl);
+    // the old page dissolves while the new one reveals; browsers without View Transitions just swap
+    if (document.startViewTransition) document.startViewTransition(() => content.replaceChildren(pageEl));
+    else content.replaceChildren(pageEl);
     // staggered reveal order; 'entering' scopes one-shot animations so later polls don't replay them
     pageEl.querySelectorAll('.kpi, .panel, .brain-stage').forEach((x, i) => x.style.setProperty('--i', Math.min(i, 10)));
     setTimeout(() => pageEl.classList.remove('entering'), 1600);
@@ -341,7 +353,7 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('hashchange', mount);
 
 buildShell();
-document.documentElement.dataset.motion = store.get('motion', 'system');
+document.documentElement.dataset.motion = store.get('motion', 'full');  // animations on by default, even when the OS asks for reduced motion
 setTheme(store.get('theme', 'light'));
 companion = createCompanion({ act, getState: () => hub.state, route: () => app.route });
 document.body.append(companion.el);

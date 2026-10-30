@@ -252,6 +252,19 @@ a:hover { text-decoration: underline; }
 @keyframes reveal { from { opacity: 0; filter: blur(8px); transform: translateY(12px) scale(.985); } to { opacity: 1; filter: blur(0); transform: none; } }
 .page > .page-head { animation: reveal .55s var(--ease) both; }
 .page .kpi, .page .panel, .page > .stack > .note, .page .brain-stage { animation: reveal .6s var(--ease) both; animation-delay: calc(var(--i, 0) * 45ms + 80ms); }
+/* the title writes itself in letter by letter; delays are set per letter in mount() */
+@keyframes letter { from { opacity: 0; filter: blur(6px); transform: translateY(.35em); } }
+.page-head h1 span { display: inline-block; white-space: pre; animation: letter .5s var(--ease) both; }
+/* page swaps: the old page dissolves through a blur while the new one reveals (View Transitions; other browsers just swap) */
+.content { view-transition-name: page; }
+::view-transition-old(page) { animation: vt-out .24s ease-in both; }
+::view-transition-new(page) { animation: none; }
+@keyframes vt-out { to { opacity: 0; filter: blur(10px); transform: scale(.99); } }
+/* ambient glow drifting behind the cards */
+body::before { content: ""; position: fixed; inset: -10%; z-index: -1; pointer-events: none;
+  background: radial-gradient(40% 35% at 15% 10%, var(--accent-bg), transparent 70%), radial-gradient(45% 40% at 85% 90%, var(--pos-bg), transparent 70%);
+  animation: drift 30s ease-in-out infinite alternate; }
+@keyframes drift { to { transform: translate(4%, -3%) rotate(6deg); } }
 
 /* ============================================================ buttons & inputs */
 .btn {
@@ -261,6 +274,10 @@ a:hover { text-decoration: underline; }
 }
 .btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--border-3); text-decoration: none; }
 .btn:active:not(:disabled) { transform: scale(.97); }
+.btn { position: relative; overflow: hidden; }
+/* click ripple, spawned from the pointer in app.js */
+.ripple { position: absolute; border-radius: 50%; background: currentColor; opacity: .22; transform: scale(0); pointer-events: none; animation: ripple .55s var(--ease) forwards; }
+@keyframes ripple { to { transform: scale(1); opacity: 0; } }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 .btn[aria-busy="true"]:disabled { opacity: .85; cursor: progress; }
 .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--on-ink); }
@@ -442,6 +459,9 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .entering .station:nth-child(2) { animation-delay: .35s; } .entering .station:nth-child(3) { animation-delay: .43s; }
 .entering .station:nth-child(4) { animation-delay: .51s; } .entering .station:nth-child(5) { animation-delay: .59s; }
 .entering .station:nth-child(1) { animation-delay: .27s; }
+/* the connector line draws down to the next station */
+.entering .station::before { transform-origin: top; animation: growY .5s var(--ease) both; animation-delay: inherit; }
+@keyframes growY { from { transform: scaleY(0); } }
 .next { padding: 11px 14px; border-radius: var(--r); background: var(--surface-2); color: var(--text-2); font-size: 13px; }
 .next b { color: var(--text); }
 
@@ -606,6 +626,8 @@ details summary { cursor: pointer; color: var(--text-2); }
 
 /* Settings → Motion: "system" follows the OS, "full" and "reduced" override it */
 @media (prefers-reduced-motion: reduce) {
-  :root:not([data-motion="full"]) *, :root:not([data-motion="full"]) *::before, :root:not([data-motion="full"]) *::after { animation: none !important; transition: none !important; }
+  :root:not([data-motion="full"]) *, :root:not([data-motion="full"]) *::before, :root:not([data-motion="full"]) *::after,
+  :root:not([data-motion="full"])::view-transition-old(*), :root:not([data-motion="full"])::view-transition-new(*), :root:not([data-motion="full"])::view-transition-group(*) { animation: none !important; transition: none !important; }
 }
-:root[data-motion="reduced"] *, :root[data-motion="reduced"] *::before, :root[data-motion="reduced"] *::after { animation: none !important; transition: none !important; }
+:root[data-motion="reduced"] *, :root[data-motion="reduced"] *::before, :root[data-motion="reduced"] *::after,
+:root[data-motion="reduced"]::view-transition-old(*), :root[data-motion="reduced"]::view-transition-new(*), :root[data-motion="reduced"]::view-transition-group(*) { animation: none !important; transition: none !important; }

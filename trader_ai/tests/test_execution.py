@@ -110,3 +110,14 @@ def test_oanda_requires_credentials(monkeypatch):
     monkeypatch.setenv("OANDA_ENVIRONMENT", "practice")
     with pytest.raises(BrokerError):
         OandaPracticeBroker()
+
+
+def test_order_is_audited_even_if_the_broker_call_crashes(setup):
+    db, pb, risk = setup
+
+    def boom(*a, **k):
+        raise ValueError("HTML error page instead of JSON")
+    pb.submit_market = boom
+    with pytest.raises(ValueError):
+        run(ExecutionPipeline(db, pb, risk, enabled=True), intent())
+    assert "k1" in ExecutionPipeline(db, pb, risk, enabled=True).submitted_keys()  # recorded as maybe-sent

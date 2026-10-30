@@ -25,6 +25,29 @@ def _sharpe(r: np.ndarray, ppy: int) -> float:
     return float(np.mean(r) / np.std(r, ddof=1) * math.sqrt(ppy))
 
 
+def deflated_sharpe(r: np.ndarray, n_trials: int, trial_sharpe_var: float) -> float:
+    """Probability that the true Sharpe is above zero after picking the best of `n_trials` variations
+    (Bailey & López de Prado 2014). r: per-period returns of the chosen strategy; trial_sharpe_var: variance of
+    the per-period (not annualised) Sharpe across the variations tried. With one trial it is the probabilistic Sharpe."""
+    from statistics import NormalDist
+
+    r = r[np.isfinite(r)]
+    if len(r) < 3 or np.std(r, ddof=1) == 0:
+        return float("nan")
+    sr = float(np.mean(r) / np.std(r, ddof=1))
+    s = pd.Series(r)
+    skew, kurt = float(s.skew()), float(s.kurt()) + 3.0  # pandas gives excess kurtosis; the formula needs plain
+    nd = NormalDist()
+    sr0 = 0.0
+    if n_trials > 1 and trial_sharpe_var > 0:  # expected best Sharpe among n_trials useless variations
+        g = 0.5772156649  # Euler-Mascheroni
+        sr0 = math.sqrt(trial_sharpe_var) * ((1 - g) * nd.inv_cdf(1 - 1 / n_trials) + g * nd.inv_cdf(1 - 1 / (n_trials * math.e)))
+    denom = 1 - skew * sr + (kurt - 1) / 4 * sr * sr
+    if denom <= 0:
+        return float("nan")
+    return nd.cdf((sr - sr0) * math.sqrt(len(r) - 1) / math.sqrt(denom))
+
+
 def bootstrap_sharpe_ci(r: np.ndarray, ppy: int, n: int = 1000, block: int = 20, seed: int = 0) -> tuple[float, float]:
     """Stationary-ish block bootstrap 90% CI for the annualised Sharpe."""
     if len(r) < block * 3:

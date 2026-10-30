@@ -53,40 +53,35 @@ export function stepList(j) {
 }
 
 export function createActivity({ onChange }) {
-  const el = h('button', { class: 'activity', type: 'button', 'aria-expanded': 'false', 'aria-label': 'What the system is doing. Click for details.' });
+  const el = h('button', { class: 'hbtn activity', type: 'button', 'aria-expanded': 'false', 'aria-label': 'Background work. Click for details.' });
   const drop = h('div', { class: 'act-drop', hidden: true });
   let data = null; let open = false; let timer = 0; let offline = false;
 
-  el.addEventListener('click', () => { open = !open; render(); });
+  el.addEventListener('click', (e) => { e.stopPropagation(); open = !open; render(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && open) { open = false; render(); } });
+  document.addEventListener('click', (e) => { if (open && !drop.contains(e.target)) { open = false; render(); } });
 
   function render() {
-    if (!data && !offline) { el.replaceChildren(h('span', { class: 'jdot' }), h('span', { class: 'muted' }, 'Checking what the system is doing…')); return; }
+    if (!data && !offline) { el.replaceChildren(h('span', { class: 'act-main' }, h('span', { class: 'jdot' }), h('span', { class: 't muted' }, 'Checking…'))); return; }
     const run = data?.running[0];
     const last = data?.recent.find((j) => j.state !== 'running');
     const svc = data?.service || {};
-    el.className = `activity ${offline ? 'bad' : run ? (run.slow ? 'slow' : 'run') : last && last.state !== 'succeeded' ? 'bad' : ''}`;
+    el.className = `hbtn activity ${offline ? 'bad' : run ? (run.slow ? 'slow' : 'run') : last && last.state !== 'succeeded' ? 'bad' : ''}`;
     let main;
     if (offline) {
-      main = [h('span', { class: 'jdot' }), h('b', null, 'Can’t reach the app’s backend. '), h('span', { class: 'muted' }, 'Is `tradeintel ui` still running? Retrying…')];
+      main = [h('span', { class: 'jdot' }), h('span', { class: 't' }, 'Backend offline')];
+      el.title = 'Can’t reach the app’s backend. Is `tradeintel ui` still running? Retrying…';
     } else if (run) {
       const pct = run.steps.length ? Math.round(100 * (run.done_steps.length + 0.5) / run.steps.length) : 50;
-      main = [h('span', { class: 'jdot' }), h('b', null, 'Working: '), `${run.label} `, h('span', { class: 'muted' }, SOURCE[run.source] || ''),
-        h('span', { class: 'sep' }, '·'), h('span', null, stepLine(run)),
-        h('span', { class: 'jbar', role: 'progressbar', 'aria-valuenow': pct, 'aria-valuemin': 0, 'aria-valuemax': 100 }, h('i', { style: { width: `${pct}%` } })),
-        h('span', { class: 'mono muted' }, `${Math.round(run.elapsed_s)} s`),
-        run.slow ? h('span', { class: 'warn' }, ` · usually about ${run.expected_s} s`) : null,
-        data.running.length > 1 ? h('span', { class: 'muted' }, ` · +${data.running.length - 1} more running`) : null];
+      main = [h('span', { class: 'jdot' }), h('span', { class: 't' }, run.label, data.running.length > 1 ? ` +${data.running.length - 1}` : ''),
+        h('span', { class: 'jbar', role: 'progressbar', 'aria-label': `${run.label} progress`, 'aria-valuenow': pct, 'aria-valuemin': 0, 'aria-valuemax': 100 }, h('i', { style: { width: `${pct}%` } })),
+        h('span', { class: 'mono small muted' }, `${Math.round(run.elapsed_s)}s`)];
+      el.title = `${stepLine(run)}${run.slow ? ` · usually about ${run.expected_s} s` : ''}`;
     } else {
-      main = [h('span', { class: 'jdot' }), h('b', null, 'Idle. '),
-        last ? [h('span', { class: last.state === 'succeeded' ? '' : 'neg' }, `Last: ${last.label}: ${last.state === 'succeeded' ? jobOutcome(last) : 'FAILED, ' + jobOutcome(last)}`),
-          h('span', { class: 'muted' }, ` (${fmt.ago(last.finished_at || last.started_at)})`)] : h('span', { class: 'muted' }, 'Nothing has run yet.')];
+      main = [h('span', { class: 'jdot' }), h('span', { class: 't' }, 'Idle')];
+      el.title = last ? `Last: ${last.label}: ${last.state === 'succeeded' ? jobOutcome(last) : 'FAILED, ' + jobOutcome(last)} (${fmt.ago(last.finished_at || last.started_at)})` : 'Nothing has run yet';
     }
-    const auto = offline ? null : svc.alive
-      ? h('span', { class: 'auto ok' }, `Automatic checks on · next ${fmt.ago(svc.next_at)}`)
-      : svc.overdue ? h('span', { class: 'auto warn', title: `Last scheduled check ${fmt.ago(svc.at)}` }, 'Automatic checks stopped (scheduler not responding)')
-        : h('span', { class: 'auto', title: 'Start them with: tradeintel service' }, 'Automatic checks off');
-    el.replaceChildren(h('span', { class: 'act-main' }, main), auto, h('span', { class: 'act-more', 'aria-hidden': 'true' }, open ? '▴' : '▾'));
+    el.replaceChildren(h('span', { class: 'act-main' }, main));
     el.setAttribute('aria-expanded', String(open));
     drop.hidden = !open || !data;
     if (open && data) {

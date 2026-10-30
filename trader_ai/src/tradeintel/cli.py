@@ -199,7 +199,8 @@ def cmd_kb(s, a):
     kb = KnowledgeBase(s.paths.db_path)
     if a.kb_cmd == "build":
         out = {"strategy_cards": ingest_strategy_cards(kb, PROJECT_ROOT / "knowledge/strategies"),
-               "concepts": ingest_markdown_dir(kb, PROJECT_ROOT / "knowledge/concepts")}
+               "concepts": ingest_markdown_dir(kb, PROJECT_ROOT / "knowledge/concepts"),
+               "research": ingest_markdown_dir(kb, PROJECT_ROOT / "knowledge/research", source="platform_research_2026_10")}
         if a.with_repos:
             for src in load_sources(PROJECT_ROOT / "knowledge/sources.yaml"):
                 dest = s.paths.data_dir.parent / "refs" / src["name"]
@@ -225,11 +226,12 @@ def cmd_risk(s, a):
         ks.engage(a.reason or "manual")
         _print({"kill_switch": True})
     elif a.risk_cmd == "reset":
-        from .service import StateStore
+        from .service import release_kill_switch
         if input("Type RESET to clear the kill switch and the losing-streak pause after reviewing the cause: ").strip() != "RESET":
             sys.exit("not reset")
-        ks.reset()
-        StateStore(s.paths.db_path).set("consecutive_losses", 0)
+        refused = release_kill_switch(s, "the terminal")
+        if refused:
+            sys.exit(refused)
         _print({"kill_switch": False, "consecutive_losses": 0})
 
 

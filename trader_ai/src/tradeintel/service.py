@@ -35,6 +35,10 @@ except ImportError:  # Windows
 log = logging.getLogger(__name__)
 
 
+class CycleBusy(RuntimeError):
+    """Another check holds the cycle lock."""
+
+
 @contextmanager
 def single_instance(lock_path):
     """Non-blocking exclusive lock so two cycles never run at once (POSIX and Windows)."""
@@ -48,7 +52,7 @@ def single_instance(lock_path):
             msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
     except OSError:
         f.close()
-        raise RuntimeError("another cycle is running")
+        raise CycleBusy("another cycle is running")
     try:
         yield
     finally:
@@ -148,13 +152,42 @@ def account_guard(s: Settings, state: StateStore, kill: KillSwitch, equity: floa
     hwm = max(state.get("hwm", equity), equity)
     state.set("hwm", hwm)
     day0 = state.get("day_start_equity", equity)
+    daily, dd, breaches = loss_levels(s, day0, hwm, equity)
+    for why in breaches:
+        kill.engage(f"{why}, detected by the cycle check")
+    return {"day_start_equity": day0, "hwm": hwm, "daily_loss": daily, "drawdown": dd}
+
+
+def loss_levels(s: Settings, day0: float, hwm: float, equity: float) -> tuple[float, float, list[str]]:
+    """Daily loss and drawdown, and which limits they breach. Shared by the cycle check and the stop release."""
     daily = (day0 - equity) / day0 if day0 else 0.0
     dd = (hwm - equity) / hwm if hwm else 0.0
-    if daily >= s.risk.max_daily_loss:
-        kill.engage(f"max daily loss reached ({daily:.2%}), detected by the cycle check")
-    if dd >= s.risk.max_drawdown:
-        kill.engage(f"max drawdown reached ({dd:.2%}), detected by the cycle check")
-    return {"day_start_equity": day0, "hwm": hwm, "daily_loss": daily, "drawdown": dd}
+    breaches = ([f"max daily loss reached ({daily:.2%})"] if daily >= s.risk.max_daily_loss else []) + \
+               ([f"max drawdown reached ({dd:.2%})"] if dd >= s.risk.max_drawdown else [])
+    return daily, dd, breaches
+
+
+def release_kill_switch(s: Settings, who: str, now: datetime | None = None) -> str | None:
+    """Turn the emergency stop off (app and CLI both come here) and audit it. Refused while a loss limit is still
+    breached, because the next check would turn it straight back on. Returns the refusal, or None when released."""
+    now = now or datetime.now(timezone.utc)
+    state, kill = StateStore(s.paths.db_path), KillSwitch(s.paths.kill_switch_file)
+    try:
+        equity = make_broker(s).account().equity
+    except BrokerError:
+        equity = None  # can't check; nothing can trade without the broker anyway, and the next check re-evaluates
+    if equity is not None:
+        day0 = state.get("day_start_equity", equity) if state.get("day") == now.date().isoformat() else equity
+        _, _, breaches = loss_levels(s, day0, max(state.get("hwm", equity), equity), equity)
+        if breaches:
+            return f"Not released: {' and '.join(breaches)} is still over its limit, so the next check would turn it back on."
+    was = {"engaged": kill.engaged(), "reason": kill.reason() if kill.engaged() else None}
+    kill.reset()
+    state.set("consecutive_losses", 0)
+    ExecutionPipeline(s.paths.db_path, None, None, False).audit(
+        "manual", f"kill-reset|{now.isoformat()}", {"action": f"emergency stop turned off from {who}", "was": was},
+        None, None, {"status": "cleared"})
+    return None
 
 
 def update_loss_streak(state: StateStore, instrument: str, pos, mark: float | None) -> None:
@@ -184,7 +217,9 @@ def check(s: Settings, progress=lambda _: None) -> dict:
     ensure_calendar(s)
     try:
         return {"ok": True, "result": run_cycle(s, progress=progress)}
-    except RuntimeError as e:  # another cycle holds the lock
+    except CycleBusy:  # the app and the scheduler started at the same moment: one check already covers this
+        return {"ok": True, "result": {"status": "skipped", "reason": "another check was already running"}}
+    except RuntimeError as e:  # e.g. the broker refused or couldn't be reached
         return {"ok": False, "error": str(e)}
 
 

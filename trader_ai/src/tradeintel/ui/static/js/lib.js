@@ -56,6 +56,12 @@ const ICONS = {
   send: 'M4 12l16-8-6 16-2-6z',
   bolt: 'M13 3L5 13h6l-1 8 8-10h-6z',
   ext: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
+  play: 'M7 5l12 7-12 7z',
+  sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
+  moon: 'M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z',
+  unlock: 'M6 11h12v10H6zM9 11V7a3 3 0 0 1 5.8-1',
+  trading: 'M4 7h12l-3-3M20 17H8l3 3',
+  strategy: 'M12 5a3 3 0 0 0-5.5-1.5A3 3 0 0 0 4 8a3 3 0 0 0 0 5 3 3 0 0 0 3 4.5A3 3 0 0 0 12 19zM12 5a3 3 0 0 1 5.5-1.5A3 3 0 0 1 20 8a3 3 0 0 1 0 5 3 3 0 0 1-3 4.5A3 3 0 0 1 12 19zM12 5v14',
 };
 export function icon(name) {
   return s('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, s('path', { d: ICONS[name] || '' }));
@@ -94,6 +100,35 @@ export const fmt = {
   },
   tone(v) { return v == null ? '' : v > 0 ? 'pos' : v < 0 ? 'neg' : ''; },
 };
+// Tween a number in `el` from its last shown value to `v` and flash the direction once. The first real
+// value counts up from zero (about 0.9 s); later changes take 0.4 s. Null shows "—"; reduced motion skips it.
+// Only the final frame is data; the frames before it are the animation.
+const REDUCE = matchMedia('(prefers-reduced-motion: reduce)');
+// Settings → Motion (html[data-motion]): system | full | reduced
+export const reducedMotion = () => { const m = document.documentElement.dataset.motion; return m === 'reduced' || (m !== 'full' && REDUCE.matches); };
+export function animateNumber(el, v, format) {
+  const from = el._v;
+  el._v = v;
+  cancelAnimationFrame(el._raf);
+  el.classList.toggle('na', v == null);
+  if (v == null || from === v || reducedMotion() || (from == null && v === 0)) { el.textContent = v == null ? '—' : format(v); return; }
+  const first = from == null;
+  const a = first ? 0 : from;
+  if (!first) {
+    el.classList.remove('flash-up', 'flash-down');
+    void el.offsetWidth;
+    el.classList.add(v > from ? 'flash-up' : 'flash-down');
+  }
+  const dur = first ? 900 : 420;
+  const t0 = performance.now();
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / dur);
+    el.textContent = format(a + (v - a) * (1 - (1 - k) ** 3));
+    if (k < 1) el._raf = requestAnimationFrame(step);
+  };
+  el._raf = requestAnimationFrame(step);
+}
+
 // timestamps: shown in local time, with the UTC ISO value in the tooltip
 export function when(iso, mode = 'time') {
   return h('span', { class: 'nowrap', title: iso ? `${iso} (UTC)` : '' }, mode === 'ago' ? fmt.ago(iso) : mode === 'date' ? fmt.date(iso) : fmt.time(iso));
@@ -186,11 +221,11 @@ export function errorState(err, retry) {
 
 // Loads `fn(signal)` into `slot`, re-rendering with `render(data)`. Aborts the
 // previous request when called again (page switch or refresh).
-export function loadInto(slot, fn, render, { quiet = false } = {}) {
+export function loadInto(slot, fn, render, { quiet = false, placeholder = null } = {}) {
   slot._ctl?.abort();
   const ctl = new AbortController();
   slot._ctl = ctl;
-  if (!quiet || !slot.childNodes.length) slot.replaceChildren(loading());
+  if (!quiet || !slot.childNodes.length) slot.replaceChildren(placeholder ? placeholder() : loading());
   return fn(ctl.signal).then((d) => { if (!ctl.signal.aborted) slot.replaceChildren(render(d)); },
     (e) => { if (e.name !== 'AbortError') slot.replaceChildren(errorState(e, () => loadInto(slot, fn, render))); });
 }

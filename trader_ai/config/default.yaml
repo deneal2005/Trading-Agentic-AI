@@ -90,6 +90,7 @@ promotion:
   min_profit_factor: 1.1
   must_beat_baselines: [no_trade, buy_and_hold]
   max_cost_stress_multiplier_loss: 2.0  # must stay profitable at 2x costs
+  min_deflated_sharpe: 0.95  # P(true Sharpe > 0) after correcting for every variation ever tried (Bailey & López de Prado)
 
 execution:
   enabled: false          # master switch for any order submission

@@ -77,12 +77,14 @@ def walk_forward(
     warm = max(cls(**{**strategy.params, **g}).warmup() for g in grid)
     folds: list[Fold] = []
     trials = 0
+    trial_sharpes: list[list[float]] = []  # per fold: annualised in-sample Sharpe of each variation (deflated Sharpe)
     start = 0
     while start + train_bars + test_bars <= len(bars):
         tr = bars.iloc[start:start + train_bars]
         te_start_i = start + train_bars
         te_end_i = te_start_i + test_bars
         best, best_s = None, -np.inf
+        trial_sharpes.append([])
         for g in grid:
             params = {**strategy.params, **g}
             res = _eval(cls, params, tr, costs, ep, signal_filter=signal_filter)
@@ -90,6 +92,7 @@ def walk_forward(
             if len(res.trades) < min_is_trades:
                 continue
             s = _sharpe(res.equity.pct_change().dropna().to_numpy(), ppy)
+            trial_sharpes[-1].append(s)
             if s > best_s:
                 best, best_s = params, s
         if best is None:
@@ -107,7 +110,8 @@ def walk_forward(
     else:
         oos_eq = pd.Series(dtype=float)
     trades = [t for f in folds for t in f.oos.trades]
-    return WalkForwardResult(strategy.name, folds, oos_eq, trades, trials)
+    return WalkForwardResult(strategy.name, folds, oos_eq, trades, trials,
+                             {"n_configs": len(grid), "trial_sharpes": trial_sharpes, "ppy": ppy})
 
 
 def oos_as_result(wf: WalkForwardResult, ep: EngineParams, costs: Costs) -> BacktestResult:

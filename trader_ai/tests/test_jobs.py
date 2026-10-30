@@ -127,3 +127,39 @@ def test_reconcile_updates_pending_orders_from_the_broker(tmp_path):
     assert res["k-wait"]["status"] == "pending" and res["k-unknown"]["status"] == "pending"
     assert "k-fill" in pipe.submitted_keys()  # still protected against re-sending
     assert ExecutionPipeline(db, object(), None, True).reconcile() == 0  # brokers without a lookup are skipped
+
+
+def test_failed_requests_are_followed_up_and_only_resent_once_the_broker_denies_them(tmp_path):
+    db = tmp_path / "db.sqlite"
+    pipe = ExecutionPipeline(db, StatusBroker({"k-arrived": {"status": "filled", "fill_price": 500.0, "filled_units": 10}}), None, True)
+    for key in ("k-arrived", "k-lost"):
+        pipe.audit("practice", key, {}, None, None, {"status": "error", "message": "network error"})
+    assert pipe.submitted_keys() == {"k-arrived", "k-lost"}  # may have reached the broker: not sent again yet
+    assert pipe.reconcile() == 2
+    with connect(db) as con:
+        res = {k: json.loads(r) for k, r in con.execute("SELECT idempotency_key, order_result FROM audit")}
+    assert res["k-arrived"]["status"] == "filled" and res["k-lost"]["status"] == "not_received"
+    assert pipe.submitted_keys() == {"k-arrived"}  # the broker confirmed the lost one never arrived
+
+
+def test_a_check_that_collides_with_a_running_one_is_skipped_not_failed(settings, monkeypatch):
+    import tradeintel.service as svc
+    monkeypatch.setattr(svc, "ensure_calendar", lambda s: True)
+    with svc.single_instance(settings.paths.db_path.parent / "cycle.lock"):
+        out = svc.check(settings)
+    assert out["ok"] and out["result"]["status"] == "skipped"
+
+
+def test_releasing_the_stop_is_refused_while_a_limit_is_breached_and_audited_when_done(settings):
+    from tradeintel.risk.engine import KillSwitch
+    from tradeintel.service import make_broker, release_kill_switch
+    kill, state = KillSwitch(settings.paths.kill_switch_file), StateStore(settings.paths.db_path)
+    equity = make_broker(settings).account().equity
+    kill.engage("max drawdown reached")
+    state.set("hwm", equity * 2)  # 50% below the peak
+    assert "max drawdown" in release_kill_switch(settings, "test") and kill.engaged()
+    state.set("hwm", equity)
+    assert release_kill_switch(settings, "test") is None and not kill.engaged()
+    with connect(settings.paths.db_path) as con:
+        row = con.execute("SELECT decision FROM audit WHERE mode='manual'").fetchone()
+    assert "turned off from test" in row[0]

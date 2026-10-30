@@ -14,6 +14,13 @@ def test_cards_and_concepts_searchable(tmp_path):
     assert facts and all(h.evidence_level == "established_fact" for h in facts)
 
 
+def test_platform_research_is_searchable_with_its_trust_level(tmp_path):
+    kb = KnowledgeBase(tmp_path / "db.sqlite")
+    assert ingest_markdown_dir(kb, PROJECT_ROOT / "knowledge/research", source="platform_research_2026_10") == 8
+    hits = kb.search("deflated sharpe trials")
+    assert hits and all(h.evidence_level in ("research_finding", "hypothesis", "unverified_claim") for h in hits)
+
+
 def test_repo_ingest_attribution_and_injection_flag(tmp_path):
     repo = tmp_path / "repo"
     (repo / "skills").mkdir(parents=True)

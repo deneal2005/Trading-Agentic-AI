@@ -2,7 +2,7 @@
 // activations from /api/brain. Node positions are layout only; everything that
 // lights up is a value the network actually computed.
 import * as THREE from '/vendor/three.module.min.js';
-import { h, api, fmt, panel, badge, kv, emptyState, errorState, loading, store } from './lib.js';
+import { h, api, fmt, panel, badge, kv, emptyState, errorState, loading, store, reducedMotion } from './lib.js';
 
 const LABELS = {
   r1: '1-day return', r5: '5-day return', r20: '20-day return', vol20: '20-day volatility', rsi14: 'RSI 14',
@@ -40,7 +40,7 @@ function layerPositions(n, x, radius) {
 const tint = (a) => COL.dim.clone().lerp(a >= 0 ? COL.pos : COL.neg, Math.min(1, Math.abs(a)));
 
 export function brain(ctx) {
-  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const reduce = reducedMotion();
   const stage = h('div', { class: 'brain-stage', tabindex: 0, role: 'img', 'aria-label': '3D view of the neural network. Drag to rotate, scroll to zoom, click a neuron for details.' });
   const labelsEl = h('div', { class: 'brain-labels', 'aria-hidden': 'true' });
   const tip = h('div', { class: 'brain-tip', style: { display: 'none' } });

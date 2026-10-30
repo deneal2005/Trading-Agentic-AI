@@ -241,3 +241,17 @@ def test_brain_exposes_real_weights_and_verified_forward_pass(app, server, setti
 def test_companion_endpoint_round_trip(server):
     body = json.loads(post(server, "/api/companion", {"message": "Explain current positions", "context": {}})[1])
     assert body["source"] == "records" and re.search(r"No open positions", body["reply"])
+
+
+def test_ui_status_model_reflects_real_state():
+    """The browser's status model (controls.js deriveStatus): no 'running' while disconnected, pending vs confirmed, etc."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    here = Path(__file__).parent
+    js = here.parent / "src" / "tradeintel" / "ui" / "static" / "js" / "controls.js"
+    r = subprocess.run([node, str(here / "ui_status_check.mjs"), str(js)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr

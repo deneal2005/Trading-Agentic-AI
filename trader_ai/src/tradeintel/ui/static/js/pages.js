@@ -1,20 +1,20 @@
 // Screens. Each page is (ctx) => { el, destroy? }. Every number shown comes from
 // the backend; anything unavailable is labelled as such.
-import { h, s, api, fmt, when, panel, flush, badge, table, kv, stat, meter, loadInto, loading, emptyState, errorState, pre, icon, store } from './lib.js';
+import { h, s, api, fmt, when, panel, flush, badge, table, kv, stat, meter, loadInto, loading, emptyState, errorState, pre, icon, store, animateNumber } from './lib.js';
+import { killControl, checkControl, killReason, deriveStatus, statusBadge } from './controls.js';
 import { stateBadge, jobOutcome, stepList, stepLine } from './activity.js';
 
 // The single most useful next action, from the real state. Order = most urgent first.
 function nextStep(st, d) {
-  if (st.kill_switch.engaged) return 'The emergency stop is on. If you didn’t mean to turn it on, press “Turn off emergency stop…”.';
+  if (st.kill_switch.engaged) return 'The emergency stop is engaged. If you didn’t mean to engage it, press “Release stop…” in the status bar.';
   if (!st.broker.available) return 'The broker can’t be reached. Check your internet connection and the keys in trader_ai/.env.';
   if (st.data.stale) return 'Price data is out of date. Press “Refresh price data” on the Chart page.';
   if (st.alerts.some((a) => a.key.startsWith('calendar:'))) return 'This week’s economic calendar is missing. Press “Refresh news & calendar” on the News & calendar page.';
-  if (!d) return 'Press “Run a new check” to see what the AI makes of the latest prices.';
-  if (!st.activity?.service?.alive) return 'Nothing urgent. Checks only run when you press “Run a new check”; to run them automatically, start `tradeintel service` in a terminal.';
+  if (!d) return 'Press “Run check” in the status bar to see what the AI makes of the latest prices.';
+  if (!st.activity?.service?.alive) return 'Nothing urgent. Checks only run when you press “Run check”; to run them automatically, start `tradeintel service` in a terminal.';
   return 'Nothing to do. The scheduler runs the next check automatically.';
 }
 
-const killReason = (r) => (r || 'no reason recorded').replace(/^ui: engaged from UI$/, 'turned on from this app').replace(/^ui: /, '');
 
 // Currencies whose announcements can move the traded market: both legs of an FX pair, else the account currency.
 function relevantCcys(st) {
@@ -31,26 +31,27 @@ function decisionText(d) {
   return `${ACTION_WORDS[d.action] || d.action} on ${d.instrument}: ${why}`;
 }
 
-// One control for the emergency stop: turns it on, or, when it's on, turns it off again (you type RESET).
-function killButton(ctx, engaged) {
-  return engaged
-    ? h('button', { class: 'btn', onclick: (e) => ctx.act('reset-kill', { confirm: 'RESET' }, { button: e.currentTarget }) }, 'Turn off emergency stop…')
-    : h('button', { class: 'btn danger', onclick: (e) => ctx.act('kill', {}, { button: e.currentTarget }) }, icon('bolt'), 'Stop all new orders');
-}
+// The emergency stop control is shared (controls.js) so every screen shows the same confirmed state.
+const killButton = () => killControl();
 
 export { brain } from './brain.js';
 
 const LWC = window.LightweightCharts;
 // a chart may be destroyed by a page switch and again by a later reload; removing it twice throws
 const once = (fn) => { let done = false; return () => { if (!done) { done = true; fn(); } }; };
-const C = { bg: '#111418', grid: '#191d22', text: '#7d8590', border: '#22272e', pos: '#2ebd85', neg: '#f0565b', ai: '#8b7cf6', info: '#5aa9ff', warn: '#e8a13a', sma50: '#5aa9ff', sma200: '#c79bff' };
+const tok = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+// chart colours follow the current theme; re-read whenever a chart is built
+const C = {};
+const readTheme = () => Object.assign(C, { bg: tok('--chart-bg'), grid: tok('--chart-grid'), text: tok('--chart-text'), border: tok('--border'), pos: tok('--pos'), neg: tok('--neg'), ai: tok('--ai'), info: tok('--info'), warn: tok('--warn'), sma50: tok('--info'), sma200: tok('--ai') });
+readTheme();
 const ACTION_TONE = { enter_long: 'pos', enter_short: 'neg', exit: 'warn', hold: '', abstain: 'ai' };
 const STANCE_TONE = { long: 'pos', short: 'neg', neutral: '', abstain: 'ai' };
 const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : null);
 
 function chartBase(el, opts = {}) {
   if (!LWC) { el.replaceChildren(emptyState('Chart library failed to load')); return null; }
-  return LWC.createChart(el, {
+  readTheme();
+  const chart = LWC.createChart(el, {
     autoSize: true,
     layout: { background: { type: 'solid', color: C.bg }, textColor: C.text, fontFamily: getComputedStyle(document.body).fontFamily, fontSize: 11 },
     grid: { vertLines: { color: C.grid }, horzLines: { color: C.grid } },
@@ -59,19 +60,29 @@ function chartBase(el, opts = {}) {
     crosshair: { mode: 0 },
     ...opts,
   });
+  // autoSize keeps bar spacing on resize, which leaves the chart half empty; refit when the width changes
+  let w = 0;
+  new ResizeObserver(([e]) => { const nw = Math.round(e.contentRect.width); if (w && nw && nw !== w) { try { chart.timeScale().fitContent(); } catch { /* chart already removed */ } } w = nw || w; }).observe(el);
+  return chart;
 }
 
 // Candles + overlays + markers from /api/bars. Returns { chart, destroy }.
 function priceChart(el, d, show = {}) {
   const chart = chartBase(el);
   if (!chart) return { destroy() {} };
-  const candles = chart.addCandlestickSeries({ upColor: C.pos, downColor: C.neg, borderVisible: false, wickUpColor: C.pos, wickDownColor: C.neg, priceLineVisible: false });
-  candles.setData(d.candles.filter((c) => c.open != null && c.close != null));
+  const bars = d.candles.filter((c) => c.open != null && c.close != null);
+  const area = show.kind === 'area';
+  const up = bars.length < 2 || bars[bars.length - 1].close >= bars[0].close;
+  const line = up ? C.pos : C.neg;
+  const candles = area
+    ? chart.addAreaSeries({ lineColor: line, lineWidth: 2, topColor: `${line}38`, bottomColor: `${line}00`, priceLineVisible: false })
+    : chart.addCandlestickSeries({ upColor: C.pos, downColor: C.neg, borderVisible: false, wickUpColor: C.pos, wickDownColor: C.neg, priceLineVisible: false });
+  candles.setData(area ? bars.map((c) => ({ time: c.time, value: c.close })) : bars);
   const vols = d.candles.filter((c) => c.volume != null);
   if (show.volume !== false && vols.length) {
     const v = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: '', lastValueVisible: false, priceLineVisible: false });
     v.priceScale().applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
-    v.setData(vols.map((c) => ({ time: c.time, value: c.volume, color: c.close >= c.open ? 'rgba(46,189,133,.28)' : 'rgba(240,86,91,.28)' })));
+    v.setData(vols.map((c) => ({ time: c.time, value: c.volume, color: `${c.close >= c.open ? C.pos : C.neg}47` })));
   }
   if (show.sma !== false) {
     for (const [k, color] of [['sma50', C.sma50], ['sma200', C.sma200]]) {
@@ -96,7 +107,7 @@ function priceChart(el, d, show = {}) {
   const last = d.candles[d.candles.length - 1];
   const setLegend = (c) => {
     if (!c) return;
-    legend.textContent = `${d.instrument} ${d.timeframe}  O ${fmt.num(c.open)}  H ${fmt.num(c.high)}  L ${fmt.num(c.low)}  C ${fmt.num(c.close)}`;
+    legend.textContent = c.open == null ? `${d.instrument} ${d.timeframe}  ${fmt.num(c.value ?? c.close)}` : `${d.instrument} ${d.timeframe}  O ${fmt.num(c.open)}  H ${fmt.num(c.high)}  L ${fmt.num(c.low)}  C ${fmt.num(c.close)}`;
   };
   setLegend(last);
   chart.subscribeCrosshairMove((p) => setLegend(p?.seriesData?.get(candles) || last));
@@ -110,10 +121,6 @@ function lineChart(el, series) {
   for (const sr of series) chart.addLineSeries({ color: sr.color, lineWidth: sr.width || 1.5, priceLineVisible: false, title: sr.title }).setData(sr.data.filter((p) => p.value != null));
   chart.timeScale().fitContent();
   return { chart, destroy: once(() => chart.remove()) };
-}
-
-function head(title, sub, ...tools) {
-  return h('div', { class: 'page-head' }, h('p', null, sub), tools.length ? h('div', { class: 'row', style: { marginLeft: 'auto' } }, tools) : null);
 }
 
 function sourceBadge(src) {
@@ -153,7 +160,7 @@ function plainObjection(o) {
 function story(st, d) {
   const sym = st.market.instrument;
   const rule = STRAT_NAMES[st.strategy.name] || st.strategy.name;
-  if (st.kill_switch.engaged) return { h: ['Trading is stopped. ', h('span', { class: 'ai' }, 'The emergency stop is on.')], why: `Reason: ${killReason(st.kill_switch.reason)}${st.kill_switch.at ? ` (${fmt.time(st.kill_switch.at)})` : ''}. New orders are refused until you turn it off with the button below.` };
+  if (st.kill_switch.engaged) return { h: ['Trading is halted. ', h('span', { class: 'ai' }, 'The emergency stop is engaged.')], why: `Reason: ${killReason(st.kill_switch.reason)}${st.kill_switch.at ? ` (${fmt.time(st.kill_switch.at)})` : ''}. New orders are refused until you release it (Emergency stop, in the status bar).` };
   if (!d) return { h: [`Watching ${sym}. `, h('span', { class: 'ai' }, 'No check has run yet.')], why: 'Run a check to see what the strategy and the AI agents make of the latest prices.' };
   const market = (d.reports || []).find((r) => r.agent === 'market');
   const side = market?.stance === 'long' ? 'buy' : market?.stance === 'short' ? 'sell' : 'stay out';
@@ -172,10 +179,10 @@ function story(st, d) {
 }
 
 function rail(st, d) {
-  const station = (cls, n, nm, ds) => h('div', { class: `station ${cls}`, role: 'listitem' }, h('div', { class: 'dotc' }, n), h('div', { class: 'nm' }, nm), h('div', { class: 'ds' }, ds));
+  const station = (cls, n, nm, ds) => h('li', { class: `station ${cls}` }, h('div', { class: 'dotc' }, n), h('div', { class: 'nm' }, nm), h('div', { class: 'ds' }, ds));
   const data = st.data;
   const s1 = data.stale ? station('stopped', '!', 'Price data', `Out of date (last bar ${fmt.date(data.last_bar)})`) : station('passed', '✓', 'Price data', `Latest daily bar ${fmt.date(data.last_bar)}`);
-  if (!d) return h('div', { class: 'rail', role: 'list' }, s1, station('', '2', 'Strategy signal', 'Not checked yet'), station('', '3', 'AI review', 'Not checked yet'),
+  if (!d) return h('ol', { class: 'rail', 'aria-label': 'Where the latest check stopped' }, s1, station('', '2', 'Strategy signal', 'Not checked yet'), station('', '3', 'AI review', 'Not checked yet'),
     station('', '4', 'Safety check', 'Not checked yet'), station('', '5', 'Order', st.mode.execution_enabled ? 'Paper orders on' : 'Orders are off'));
   const market = (d.reports || []).find((r) => r.agent === 'market');
   const sideWord = { long: 'Says buy', short: 'Says sell', neutral: 'Says stay out', abstain: 'No reading' }[market?.stance] || '—';
@@ -193,86 +200,157 @@ function rail(st, d) {
   const s5 = !st.mode.execution_enabled ? station('', '5', 'Order', 'Orders are off (watching only)')
     : res?.status === 'filled' ? station('passed', '✓', 'Order', `Filled at ${fmt.num(res.fill_price)}`)
       : res ? station('stopped', '!', 'Order', res.status) : station('', '5', 'Order', 'Nothing sent');
-  return h('div', { class: 'rail', role: 'list', 'aria-label': 'Where the latest check stopped' }, s1, s2, s3, s4, s5);
+  return h('ol', { class: 'rail', 'aria-label': 'Where the latest check stopped' }, s1, s2, s3, s4, s5);
 }
 
+// Live mid price for a position, only when the broker's quote is for that instrument.
+function markOf(st, p) {
+  const q = st.broker.quote;
+  return q && q.instrument === p.instrument ? (q.bid + q.ask) / 2 : null;
+}
+// Position value in the account currency (mirrors api._position_notional); null when it can't be converted.
+function notional(p, px, ccy) {
+  const i = p.instrument;
+  const u = Math.abs(p.units);
+  if (/^[A-Z]{6}$/.test(i)) return i.slice(3) === ccy ? u * px : i.slice(0, 3) === ccy ? u : null;
+  return u * px;
+}
+function accountMetrics(st) {
+  const b = st.broker;
+  const acc = st.account_state || {};
+  const day = acc.day_start_equity && acc.day === new Date().toISOString().slice(0, 10) ? b.equity - acc.day_start_equity : null;
+  let unreal = 0; let expo = 0; let marked = true;
+  for (const p of b.positions || []) {
+    const m = markOf(st, p);
+    marked = marked && m != null;
+    unreal = unreal == null || m == null ? null : unreal + (m - p.avg_price) * p.units;
+    const n = notional(p, m ?? p.avg_price, b.currency);
+    expo = expo == null || n == null ? null : expo + n;
+  }
+  return { day, dayPct: day == null ? null : day / acc.day_start_equity, unreal, expo, expoPct: expo == null || !b.equity ? null : expo / b.equity, marked };
+}
+
+function positionsTable(st) {
+  const b = st.broker;
+  if (!b.available) return emptyState('Holdings unknown', `The broker can’t be reached, so what the account holds can’t be shown. ${b.error || ''}`);
+  const pos = b.positions || [];
+  if (!pos.length) return emptyState('No open positions', 'The account is flat. Positions appear here only when the broker reports them; a running scheduler or a “buy” decision alone doesn’t open one.');
+  const pnl = (p) => { const m = markOf(st, p); return m == null ? null : (m - p.avg_price) * p.units; };
+  return table([
+    { label: 'Instrument', render: (p) => h('b', null, p.instrument) },
+    { label: 'Side', render: (p) => badge(p.units > 0 ? 'Long' : 'Short', p.units > 0 ? 'pos' : 'neg') },
+    { label: 'Units', num: true, render: (p) => fmt.num(Math.abs(p.units), 0) },
+    { label: 'Avg price', num: true, render: (p) => fmt.num(p.avg_price) },
+    { label: 'Mark', num: true, render: (p) => { const m = markOf(st, p); return m == null ? h('span', { class: 'dim', title: 'No live price for this instrument' }, '—') : fmt.num(m); } },
+    { label: 'Unrealised P&L', num: true, render: (p) => { const v = pnl(p); return v == null ? h('span', { class: 'dim', title: 'Needs a live price' }, '—') : h('span', { class: fmt.tone(v) }, fmt.signed(v)); } },
+  ], pos);
+}
+
+function kpiTile(label, hint, cls = '') {
+  const v = h('div', { class: 'kpi-v na' }, '—');
+  const sub = h('div', { class: 'kpi-s' });
+  return { el: h('div', { class: `kpi ${cls}`, title: hint }, h('div', { class: 'kpi-k' }, label), v, sub), v, sub };
+}
+// `chip` is a small signed change before the sub line, like the reference's "+5% this month"
+function setKpi(t, value, format, sub, toned = false, chip = null) {
+  animateNumber(t.v, value, format);
+  t.v.classList.toggle('pos', toned && value > 0);
+  t.v.classList.toggle('neg', toned && value < 0);
+  t.sub.replaceChildren(chip ? h('span', { class: `chip ${chip.tone}` }, chip.text) : '', sub);
+  t.sub.title = sub;
+}
+
+// segmented control; `opts` = [[label, value]]
+function segCtl(label, opts, get, set) {
+  const el = h('div', { class: 'seg', role: 'group', 'aria-label': label });
+  const draw = () => el.replaceChildren(...opts.map(([l, v]) => h('button', { class: v === get() ? 'on' : '', 'aria-pressed': String(v === get()), onclick: () => { set(v); draw(); } }, l)));
+  draw();
+  return el;
+}
+const RANGES = [['1M', 21], ['3M', 63], ['6M', 126], ['1Y', 252], ['All', 0]];
+const SRC_WORDS = { app: 'from this app', service: 'by the scheduler', cli: 'from the terminal' };
+
 export function overview(ctx) {
-  const hero = h('section', { class: 'hero', 'aria-live': 'polite' });
-  const acct = h('div');
+  const sym = ctx.state.market.instrument;
+  const T = {
+    equity: kpiTile('Equity', 'Total account value reported by the broker', 'hero'),
+    cash: kpiTile('Cash', 'Cash balance reported by the broker'),
+    day: kpiTile('Today’s P&L', 'Equity now minus equity at today’s first check (UTC day)'),
+    unreal: kpiTile('Unrealised P&L', 'Open positions marked at the live mid price'),
+    expo: kpiTile('Exposure', 'Value of open positions as a share of equity'),
+    orders: kpiTile('Open orders', 'Orders waiting at the broker'),
+  };
+  const decBody = h('div');
+  const decLink = h('a', { class: 'btn sm ghost', hidden: true }, 'How it decided →');
   const chartSlot = h('div', { class: 'chart' });
+  const chgEl = h('span', { class: 'chg-pill' });
+  const posSlot = h('div');
   const safety = h('div');
   const attention = h('div');
   const recent = h('div');
   let chartObj = null;
-  let lastDecision = null;
+  let lastDecision;  // undefined = still loading, null = none recorded
   let liveCheck = ctx.state.activity?.running.find((j) => j.kind === 'check') || null;
   let events = [];
+  let range = store.get('ov.range', 126);
+  let kind = store.get('ov.kind', 'area');
+  const decPanel = panel('Latest AI decision', decBody, { cls: 'decision', tools: decLink });
 
-  const el = h('div', { class: 'stack', style: { gap: '16px' } }, hero,
+  const el = h('div', { class: 'stack', style: { gap: '14px' } },
+    h('div', { class: 'kpis', style: { marginBottom: 0 } }, Object.values(T).map((t) => t.el)),
     h('div', { class: 'grid' },
-      h('div', { class: 'c4' }, panel('Paper account', acct)),
-      h('div', { class: 'c8' }, panel(`${ctx.state.market.instrument} price`, flush(chartSlot), {
-        meta: 'daily',
-        tools: h('a', { class: 'btn sm ghost', href: '#/markets' }, 'Open chart'),
+      h('div', { class: 'c8' }, panel(`${sym} price`, flush(chartSlot), {
+        meta: chgEl,
+        tools: [segCtl('Chart type', [['Line', 'area'], ['Candles', 'candles']], () => kind, (v) => { kind = v; store.set('ov.kind', v); loadChart(); }),
+          segCtl('Range', RANGES, () => range, (v) => { range = v; store.set('ov.range', v); loadChart(); })],
       })),
-      h('div', { class: 'c4' }, panel('Safety', safety, { tools: h('a', { class: 'btn sm ghost', href: '#/risk' }, 'Details') })),
-      h('div', { class: 'c4' }, panel('Needs your attention', attention)),
-      h('div', { class: 'c4' }, panel('Recent activity', recent, { tools: h('a', { class: 'btn sm ghost', href: '#/activity' }, 'History') }))));
+      h('div', { class: 'c4' }, decPanel)),
+    h('div', { class: 'grid' },
+      h('div', { class: 'c8' }, panel('Open positions', flush(posSlot), { meta: 'as reported by the broker', tools: h('a', { class: 'btn sm ghost', href: '#/execution' }, 'Orders →') })),
+      h('div', { class: 'c4' }, panel('Safety limits', safety, { tools: h('a', { class: 'btn sm ghost', href: '#/risk' }, 'Details →') }))),
+    h('div', { class: 'grid' },
+      h('div', { class: 'c6' }, panel('Needs your attention', attention)),
+      h('div', { class: 'c6' }, panel('Recent activity', recent, { tools: h('a', { class: 'btn sm ghost', href: '#/activity' }, 'History →') }))));
 
-  function renderHero(st) {
+  function renderKpis(st) {
+    const b = st.broker;
+    if (!b.available) {
+      for (const t of Object.values(T)) setKpi(t, null, String, 'broker offline');
+      return;
+    }
+    const m = accountMetrics(st);
+    const npos = (b.positions || []).length;
+    setKpi(T.equity, b.equity, (v) => fmt.money(v), `${b.currency} · account ${b.account}`);
+    setKpi(T.cash, b.cash, (v) => fmt.money(v), b.currency);
+    setKpi(T.day, m.day, (v) => fmt.signed(v), m.day == null ? 'starts after today’s first check' : 'since the day started', true,
+      m.day == null ? null : { text: fmt.pct(m.dayPct, 2, true), tone: fmt.tone(m.dayPct) });
+    setKpi(T.unreal, npos ? m.unreal : 0, (v) => fmt.signed(v), !npos ? 'no open position' : m.unreal == null ? 'needs a live price' : 'at live mid price', true);
+    setKpi(T.expo, npos ? m.expoPct : 0, (v) => fmt.pct(v, 1), !npos ? 'nothing invested' : m.expo == null ? 'can’t convert to account currency' : `${fmt.money(m.expo)} ${b.currency}${m.marked ? '' : ' at cost'}`);
+    setKpi(T.orders, b.open_orders ? b.open_orders.length : null, (v) => fmt.num(v, 0), b.open_orders ? 'waiting at the broker' : 'not reported by this broker');
+  }
+
+  function renderDecision(st) {
     const d = lastDecision;
     if (liveCheck) {  // a check is running right now (from any tab, the terminal or the scheduler)
-      hero.replaceChildren(
-        h('div', { class: 'eyebrow' }, `${st.market.instrument} · daily`, h('span', { class: 'sep' }, '·'), `started ${({ app: 'from this app', service: 'by the scheduler', cli: 'from the terminal' })[liveCheck.source] || ''}`,
-          h('span', { class: 'sep' }, '·'), `${Math.round(liveCheck.elapsed_s)} s so far`),
-        h('h2', null, `Checking ${st.market.instrument} now… `, h('span', { class: 'ai' }, liveCheck.step + '.')),
-        h('p', { class: 'why' }, liveCheck.slow ? `This is taking longer than usual (normally about ${liveCheck.expected_s} s). It is still running; the steps below show where.` : 'The result will replace this as soon as the check finishes.'),
-        stepList(liveCheck),
-        h('div', { class: 'actions' }, h('button', { class: 'btn primary', disabled: true, dataset: { job: 'check' } }, h('span', { class: 'spin' }), 'Check running…')));
+      decBody.replaceChildren(
+        h('div', { class: 'eyebrow' }, `started ${SRC_WORDS[liveCheck.source] || ''} · ${Math.round(liveCheck.elapsed_s)} s so far`),
+        h('h3', null, `Checking ${st.market.instrument}… `, h('span', { class: 'ai' }, `${liveCheck.step}.`)),
+        h('p', { class: 'why' }, liveCheck.slow ? `Taking longer than usual (normally about ${liveCheck.expected_s} s). It is still running.` : 'The result replaces this as soon as the check finishes.'),
+        stepList(liveCheck));
+      decLink.hidden = true;
       return;
     }
-    if (d === undefined) {  // first fetch still running: don't flash an empty rail
-      hero.replaceChildren(h('div', { class: 'eyebrow' }, `${st.market.instrument} · daily`), h('h2', null, 'Loading the latest check…'), loading(2));
-      return;
-    }
+    if (d === undefined) { decBody.replaceChildren(loading(5)); return; }
     const s = story(st, d);
-    const b = st.broker;
-    hero.replaceChildren(
-      h('div', { class: 'eyebrow' }, `${st.market.instrument} · daily`, h('span', { class: 'sep' }, '·'),
-        b.available ? `${b.environment === 'paper' ? 'internal paper' : b.broker} paper account` : 'broker offline', h('span', { class: 'sep' }, '·'),
-        st.mode.execution_enabled ? 'paper orders on' : 'orders off',
-        d ? [h('span', { class: 'sep' }, '·'), 'last check ', when(d.decided_at, 'ago')] : null),
-      h('h2', null, s.h),
-      h('p', { class: 'why' }, s.why),
-      rail(st, d),
-      h('div', { class: 'next' }, h('b', null, 'What to do next: '), nextStep(st, d)),
-      h('div', { class: 'actions' },
-        h('button', { class: 'btn primary', dataset: { job: 'check' }, onclick: (e) => ctx.act('run-once', {}, { button: e.currentTarget }) }, icon('bolt'), 'Run a new check'),
-        st.kill_switch.engaged ? killButton(ctx, true) : null,
-        d ? h('a', { class: 'btn ghost', href: `#/agents?decision=${d.id}` }, 'See how it decided') : null));
+    decBody.replaceChildren(
+      h('div', { class: 'eyebrow' }, `${st.market.instrument} · ${st.market.timeframe}`, d ? [' · checked ', when(d.decided_at, 'ago')] : null),
+      h('h3', null, s.h), h('p', { class: 'why' }, s.why), rail(st, d),
+      h('div', { class: 'next' }, h('b', null, 'Next: '), nextStep(st, d)));
+    decLink.hidden = !d;
+    if (d) decLink.href = `#/agents?decision=${d.id}`;
   }
 
-  function renderAccount(st) {
-    const b = st.broker;
-    if (!b.available) { acct.replaceChildren(emptyState('Broker not connected', b.error)); return; }
-    const pos = b.positions || [];
-    const q = b.quote;
-    const acc = st.account_state || {};
-    const day = acc.day_start_equity && acc.day === new Date().toISOString().slice(0, 10) ? b.equity - acc.day_start_equity : null;
-    let unreal = 0;
-    for (const p of pos) unreal = q && p.instrument === q.instrument && unreal != null ? unreal + ((q.bid + q.ask) / 2 - p.avg_price) * p.units : null;
-    acct.replaceChildren(h('div', { class: 'stack', style: { gap: '14px' } },
-      h('div', null, h('div', { class: 'small muted' }, 'Total value'),
-        h('div', { class: 'mono', style: { fontSize: 'clamp(22px, 2.2vw, 30px)', fontWeight: 500, lineHeight: 1.2 } }, fmt.money(b.equity, '', 2), h('span', { class: 'muted', style: { fontSize: '15px', marginLeft: '6px' } }, b.currency))),
-      kv([['Cash', h('span', { class: 'mono' }, fmt.money(b.cash))],
-        ['Change today', day == null ? h('span', { class: 'dim', title: 'Starts counting after today’s first check' }, '—') : h('span', { class: `mono ${fmt.tone(day)}` }, fmt.signed(day))],
-        ['Open positions', pos.length ? pos.map((p) => `${p.instrument} ${fmt.signed(p.units, 0)}`).join(', ') : 'None'],
-        ['Unrealised profit/loss', pos.length && unreal != null ? h('span', { class: `mono ${fmt.tone(unreal)}` }, fmt.signed(unreal)) : h('span', { class: 'dim' }, pos.length ? 'needs a live price' : '—')],
-        ['Open orders', b.open_orders ? String(b.open_orders.length) : '—'],
-        [`${st.market.instrument} now`, q ? h('span', { class: 'mono' }, `${fmt.num(q.bid)} / ${fmt.num(q.ask)}`) : h('span', { class: 'dim' }, 'no live price')]])));
-  }
-
-  function renderAttention(st, events) {
+  function renderAttention(st) {
     const now = Date.now();
     const ccys = relevantCcys(st);
     const upcoming = (events || []).filter((e) => e.impact === 'high' && ccys.includes(e.currency) && new Date(e.event_time) > now).slice(0, 3);
@@ -291,7 +369,6 @@ export function overview(ctx) {
       h('span', { class: 'small dim nowrap' }, fmt.ago(j.started_at))))));
     return true;
   }
-
   function renderRecent(ds, au) {
     if (renderJobs(ctx.state.activity?.recent)) return;
     const rows = [
@@ -303,42 +380,54 @@ export function overview(ctx) {
       : emptyState('Nothing yet', 'Each check and order attempt is listed here.'));
   }
 
+  function live(st) { renderKpis(st); renderDecision(st); posSlot.replaceChildren(positionsTable(st)); renderAttention(st); }
+
   function refresh(st) {
-    renderHero(st); renderAccount(st);
+    live(st);
     Promise.all([api.get('/api/decisions?limit=6'), api.get('/api/audit?limit=6'), api.get('/api/risk'), api.get('/api/news')]).then(([ds, au, r, n]) => {
+      const fresh = ds[0] && store.get('ov.seen') !== ds[0].id;
       lastDecision = ds[0] || null;
-      if (lastDecision && store.get('ov.seen') !== lastDecision.id) {  // a check you haven't seen yet: make it visible
+      if (fresh) {  // a check you haven't seen yet: draw the eye to it once
         store.set('ov.seen', lastDecision.id);
-        hero.classList.remove('fresh');
-        void hero.offsetWidth;  // restart the highlight animation
-        hero.classList.add('fresh');
+        decPanel.classList.remove('fresh');
+        void decPanel.offsetWidth;
+        decPanel.classList.add('fresh');
       }
-      renderHero(ctx.state);
+      renderDecision(ctx.state);
       renderRecent(ds, au);
       safety.replaceChildren(riskSummary(r));
       events = n.events;
-      renderAttention(ctx.state, events);
-    }).catch((e) => safety.replaceChildren(errorState(e)));
+      renderAttention(ctx.state);
+    }).catch((e) => { if (lastDecision === undefined) { lastDecision = null; renderDecision(ctx.state); } safety.replaceChildren(errorState(e)); });
+  }
+
+  function loadChart() {
+    const label = RANGES.find(([, n]) => n === range)?.[0] || '';
+    loadInto(chartSlot, (sg) => api.get(`/api/bars?limit=${range}`, sg), (d) => {
+      chartObj?.destroy(); chartObj = null;
+      if (!d.available) { chgEl.textContent = ''; return emptyState('No price data', d.error); }
+      const cs = d.candles.filter((c) => c.close != null);
+      const ch = cs.length > 1 ? cs[cs.length - 1].close / cs[0].close - 1 : null;
+      chgEl.className = `chg-pill ${fmt.tone(ch)}`;
+      chgEl.textContent = ch == null ? '' : `${fmt.pct(ch, 1, true)} · ${label}`;
+      const box = h('div', { class: 'chart' });
+      queueMicrotask(() => { chartObj = priceChart(box, d, { kind, volume: kind === 'candles', sma: false, decisions: false }); });
+      return box;
+    }, { placeholder: () => h('div', { class: 'ph', style: { padding: '12px', height: '360px' } }, h('div', { class: 'skeleton block' })) });
   }
 
   refresh(ctx.state);
-  loadInto(chartSlot, (sg) => api.get('/api/bars?limit=260', sg), (d) => {
-    chartObj?.destroy();
-    if (!d.available) return emptyState(d.error);
-    const box = h('div', { class: 'chart' });
-    queueMicrotask(() => { chartObj = priceChart(box, d, { volume: true, decisions: false }); });
-    return box;
-  });
+  loadChart();
   let n = 0;
   return {
     el,
     // state polls every 10 s; the heavier panels refresh every minute
-    onState(st) { renderHero(st); renderAccount(st); renderAttention(st, events); if (++n % 6 === 0) refresh(st); },
+    onState(st) { live(st); if (++n % 6 === 0) refresh(st); },
     onActivity(act) {
       const was = liveCheck;
       liveCheck = act?.running.find((j) => j.kind === 'check') || null;
       if (was && !liveCheck) refresh(ctx.state);  // it just finished: load the new decision
-      else renderHero(ctx.state);
+      else renderDecision(ctx.state);
       renderJobs(act?.recent);
     },
     destroy() { chartObj?.destroy(); },
@@ -445,9 +534,10 @@ const ORDER_STATUS = {
   partially_filled: ['Partly filled', 'info', 'Some of it filled; the rest is still open at the broker.'],
   filled: ['Filled', 'pos', 'The broker filled it.'],
   refused: ['Refused by safety check', 'warn', 'The safety check stopped it before anything was sent.'],
-  not_sent: ['Not sent (orders off)', '', 'It passed the safety check, but orders are switched off, so it was only recorded.'],
+  not_sent: ['Not sent', '', 'Nothing went to the broker: orders are switched off, or the broker couldn’t be reached first.'],
+  not_received: ['Never reached broker', '', 'The request failed and the broker has no record of it, so nothing was placed. The next check may send it again.'],
   rejected: ['Rejected by broker', 'neg', 'The broker refused it.'],
-  error: ['Failed: status unknown', 'neg', 'The request failed (e.g. network). It may or may not have reached the broker; it is never re-sent automatically.'],
+  error: ['Failed: status unknown', 'neg', 'The request failed (e.g. network) and may still have reached the broker. It isn’t sent again until “Check status with broker” (or the next check) confirms it never arrived.'],
   cancelled: ['Cancelled', '', 'The broker cancelled or expired it.'],
   closed: ['Position closed', '', 'An exit closed the position.'],
 };
@@ -486,7 +576,7 @@ export function execution(ctx) {
     const orders = rows.filter(isOrder);
     const counts = {};
     for (const a of orders) { const k = orderStatus(a).key; counts[k] = (counts[k] || 0) + 1; }
-    const order = ['pending', 'partially_filled', 'filled', 'refused', 'not_sent', 'rejected', 'error', 'cancelled', 'closed'];
+    const order = ['pending', 'partially_filled', 'filled', 'refused', 'not_sent', 'not_received', 'rejected', 'error', 'cancelled', 'closed'];
     summary.replaceChildren(h('div', { class: 'ostrip' }, order.filter((k) => counts[k] || ['pending', 'filled', 'refused', 'error'].includes(k)).map((k) => {
       const [label, tone] = ORDER_STATUS[k];
       return h('div', { class: `ostat ${counts[k] ? tone : 'zero'}` }, h('div', { class: 'n' }, String(counts[k] || 0)), h('div', { class: 'l' }, label));
@@ -497,7 +587,7 @@ export function execution(ctx) {
         h('div', { class: 'small', style: { maxWidth: '560px' } }, 'An order appears here when a check decides to buy or sell. So far every check has decided not to trade (see “AI decisions”).',
           enabled ? '' : ' Orders are also switched off, so even a buy signal would only be recorded here as “Not sent”.'),
         h('div', { class: 'row', style: { justifyContent: 'center', marginTop: '6px' } },
-          h('button', { class: 'btn primary', dataset: { job: 'check' }, onclick: (e) => ctx.act('run-once', {}, { button: e.currentTarget }) }, icon('bolt'), 'Run a new check'),
+          checkControl(),
           h('a', { class: 'btn ghost', href: '#/agents' }, 'See past checks'))));
       detail.replaceChildren(emptyState('Nothing to show', 'Order details appear here.'));
       return;
@@ -527,8 +617,13 @@ export function execution(ctx) {
   const st = ctx.state;
   const b = st.broker;
   const enabled = st.mode.execution_enabled;
+  const posSlot = h('div', null, positionsTable(st));
+  const killState = h('div', { class: 'row' });
+  const drawKill = () => { const k = deriveStatus().kill; killState.replaceChildren(statusBadge(k), h('span', { class: 'small muted' }, k.sub)); };
+  drawKill();
   el.append(
     liveSlot,
+    panel('Open positions', flush(posSlot), { meta: `as reported by the broker · ${fmt.ago(b.fetched_at)}` }),
     panel('Orders', h('div', { class: 'stack', style: { gap: '14px' } }, summary, listSlot), {
       meta: enabled ? 'paper orders on' : 'orders off: watching only',
       tools: h('button', { class: 'btn sm', dataset: { job: 'reconcile' }, title: 'Ask the broker what happened to orders still waiting',
@@ -538,18 +633,20 @@ export function execution(ctx) {
       h('div', { class: 'c7' }, panel('Selected order', detail)),
       h('div', { class: 'c5' }, h('div', { class: 'stack', style: { gap: '16px' } },
         panel('Account', kv([['Account', b.available ? `${b.broker} paper ${b.account}` : 'not connected'], ['Order mode', enabled ? 'Paper orders on (passed strategies only)' : 'Watching only: nothing is sent'],
-          ['Open positions', (b.positions || []).length ? b.positions.map((p) => `${p.instrument} ${fmt.signed(p.units, 0)} @ ${fmt.num(p.avg_price)}`).join(', ') : 'none'],
           ['Waiting at broker', b.open_orders ? String(b.open_orders.length) : 'not available']]),
         { foot: 'Change the order mode in config/local.yaml (execution.enabled) and restart. Real-money trading is not possible in this app.' }),
         panel('Emergency stop', h('div', { class: 'stack' },
-          h('div', { class: 'row' }, st.kill_switch.engaged ? badge('on: new orders blocked', 'neg') : badge('off', 'pos'),
-            st.kill_switch.engaged ? h('span', { class: 'small muted' }, `${killReason(st.kill_switch.reason)} · `, when(st.kill_switch.at)) : null),
-          h('div', null, killButton(ctx, st.kill_switch.engaged)),
+          killState,
+          h('div', null, killButton()),
           h('div', { class: 'small muted' }, 'Blocks new orders only. It doesn\'t sell what you hold or cancel orders already at the broker.')))))));
   listSlot.replaceChildren(loading(4));
   load();
   renderLive(st.activity);
-  return { el, onActivity: (act) => { const was = !!liveSlot.childNodes.length; renderLive(act); if (was && !liveSlot.childNodes.length) load(); } };
+  return {
+    el,
+    onState: (cur) => { posSlot.replaceChildren(positionsTable(cur)); drawKill(); },
+    onActivity: (act) => { const was = !!liveSlot.childNodes.length; renderLive(act); if (was && !liveSlot.childNodes.length) load(); },
+  };
 }
 
 // The life of one order, step by step, from what was recorded.
@@ -566,7 +663,7 @@ function orderDetail(a) {
     h('ol', { class: 'jsteps big' },
       step('done', 'The AI decided to trade', `${orderLine(a)} · ${i.strategy || ''} · ${fmt.time(a.at)}`),
       step(refused ? 'bad' : 'done', refused ? 'Safety check refused it' : 'Safety check passed', refused ? (a.risk.reasons || []).join('; ') : a.risk?.risk_amount != null ? `money at risk if the stop is hit: ${fmt.num(a.risk.risk_amount)}` : ''),
-      step(refused ? 'skip' : sent ? 'done' : 'skip', sent ? 'Sent to the broker' : 'Not sent', sent ? `order key ${a.idempotency_key}` : refused ? 'stopped by the safety check' : 'orders are switched off'),
+      step(refused ? 'skip' : sent ? 'done' : 'skip', sent ? 'Sent to the broker' : 'Not sent', sent ? `order key ${a.idempotency_key}` : refused ? 'stopped by the safety check' : res.message || 'orders are switched off'),
       step(sent ? brokerState : 'skip', { filled: 'Filled', partially_filled: 'Partly filled', pending: 'Waiting for the broker', rejected: 'Rejected by the broker', cancelled: 'Cancelled', error: 'No answer (request failed)' }[st.key] || 'Broker',
         sent ? [res.fill_price != null ? `fill price ${fmt.num(res.fill_price)}` : '', res.filled_units ? ` · ${fmt.num(res.filled_units, 0)} filled` : '', res.message ? ` · ${res.message}` : '',
           res.checked_at ? ` · checked ${fmt.ago(res.checked_at)}` : ''].join('') : '')),
@@ -592,8 +689,8 @@ export function agents(ctx) {
       'The strategy rule gives a signal, three agents review it, a coordinator decides, then the safety check runs. ',
       'They are fixed rules that run once per check (not chatbots), so there is nothing to start or pause.'),
     h('div', { class: 'row' },
-      h('button', { class: 'btn primary', dataset: { job: 'check' }, onclick: (e) => ctx.act('run-once', {}, { button: e.currentTarget }) }, icon('bolt'), 'Run a new check'),
-      killButton(ctx, ctx.state.kill_switch.engaged)),
+      checkControl(),
+      killButton()),
     h('div', { class: 'grid' },
       h('div', { class: 'c7' }, panel('How a check flows', graphSlot, { meta: 'click a step for details' })),
       h('div', { class: 'c5' }, panel('Step details', nodeSlot))),
@@ -626,7 +723,7 @@ export function agents(ctx) {
     return table([
       { label: 'Time', render: (d) => when(d.decided_at) }, { label: 'Action', render: (d) => actionBadge(d.action) },
       { label: 'Strategy', render: (d) => `${d.strategy} · ${d.instrument}` },
-    ], decisions, { empty: 'No checks yet. Press “Run a new check”.', maxHeight: '480px', selected: (d) => d.id === selDecision,
+    ], decisions, { empty: 'No checks yet. Press “Run check”.', maxHeight: '480px', selected: (d) => d.id === selDecision,
       onRow: (d) => { selDecision = d.id; listSlot.replaceChildren(decisionTable()); renderTrace(); } });
   }
 
@@ -720,7 +817,7 @@ export function risk(ctx) {
       h('div', { class: 'c5' }, panel('Emergency stop', h('div', { class: 'stack' },
         h('div', { class: 'row' }, r.kill_switch.engaged ? badge('on: orders blocked', 'neg') : badge('off', 'pos'),
           r.kill_switch.engaged ? h('span', null, killReason(r.kill_switch.reason), ' · ', when(r.kill_switch.at)) : h('span', { class: 'muted' }, 'Turns on by itself if the account loses too much in a day or from its peak.')),
-        h('div', { class: 'row' }, killButton(ctx, r.kill_switch.engaged)),
+        h('div', { class: 'row' }, killButton()),
         h('div', { class: 'small muted' }, 'It only blocks new orders; what you hold stays. To turn it off, check why it went on first; you\'ll be asked to type RESET.')))),
       h('div', { class: 'c7' }, panel('How close the account is to each limit', h('div', { class: 'stack', style: { gap: '14px' } }, r.utilisation.map(utilRow))))),
     h('div', { class: 'grid' },
@@ -803,7 +900,8 @@ export function research(ctx) {
     if (o.n_trades != null && o.n_trades < data.promotion.min_trades) warns.push(`Only ${o.n_trades} trades: too few for reliable statistics (gate needs ${data.promotion.min_trades}).`);
     const ci = o.sharpe_ci90;
     if (Array.isArray(ci) && ci[0] <= 0) warns.push(`Sharpe 90% CI ${fmt.num(ci[0])} … ${fmt.num(ci[1])} includes zero.`);
-    if (e.n_trials > 100) warns.push(`${e.n_trials} trials run: the best result is inflated by selection (deflated Sharpe isn't implemented yet).`);
+    const dsr = m.deflated_sharpe;
+    if (dsr && !(dsr.value >= data.promotion.min_deflated_sharpe)) warns.push(`Deflated Sharpe ${fmt.pct(dsr.value, 0)}: after ${dsr.n_trials} variations tried, this result could be luck (gate needs ${fmt.pct(data.promotion.min_deflated_sharpe, 0)}).`);
     const bl = m.baselines || {};
     detSlot.replaceChildren(h('div', { class: 'stack' },
       h('div', { class: 'row' }, h('b', null, `#${e.id} ${e.strategy}`), sourceBadge(e.data_source), e.verdict ? badge(e.verdict, e.verdict === 'promotable' ? 'pos' : 'neg') : null,
@@ -835,7 +933,7 @@ export function research(ctx) {
     const box = h('div', { class: 'chart short' });
     const mm = res.metrics;
     runSlot.replaceChildren(h('div', { class: 'note warn small' }, res.warning),
-      h('div', { class: 'strip' }, stat('Return', fmt.pct(mm.net_return, 1), '', fmt.tone(mm.net_return)), stat('Sharpe', fmt.num(mm.sharpe)), stat('Max DD', fmt.pct(mm.max_drawdown, 1)),
+      h('div', { class: 'strip-stats' }, stat('Return', fmt.pct(mm.net_return, 1), '', fmt.tone(mm.net_return)), stat('Sharpe', fmt.num(mm.sharpe)), stat('Max DD', fmt.pct(mm.max_drawdown, 1)),
         stat('Trades', fmt.num(mm.n_trades, 0)), stat('Win rate', fmt.pct(mm.win_rate, 0)), stat('Profit factor', fmt.num(mm.profit_factor)), stat('Costs', fmt.num(mm.total_costs, 0), 'spread+slippage+financing')),
       h('div', { class: 'row small muted' }, h('span', { style: { color: C.ai } }, '━ ', res.strategy), h('span', { style: { color: C.text } }, '━ buy & hold (benchmark)')), box);
     queueMicrotask(() => { runChart = lineChart(box, [{ data: res.benchmark, color: C.text, width: 1 }, { data: res.equity, color: C.ai }]); });
@@ -933,8 +1031,16 @@ export function settings(ctx) {
           h('div', { class: 'row' }, h('button', { class: 'btn sm', onclick: () => ctx.companion.resetPosition() }, 'Reset position')),
           kv([['LLM for free-text questions', st.llm.provider === 'none' ? 'none (rule-based answers only)' : st.llm.provider], ['Voice', h('span', { class: 'dim' }, 'not implemented')],
             ['Desktop floating', h('span', { class: 'dim' }, 'in-app only: this is a web app and can\'t float over other Windows apps')]]))),
+        panel('Appearance', h('div', { class: 'stack' },
+          h('div', { class: 'row' }, h('span', { style: { minWidth: '70px' } }, 'Motion'),
+            segCtl('Motion', [['System', 'system'], ['Full', 'full'], ['Reduced', 'reduced']], () => store.get('motion', 'system'), (v) => {
+              store.set('motion', v);
+              document.documentElement.dataset.motion = v;
+            })),
+          h('div', { class: 'small muted' }, 'Page reveals, counting numbers, growing meters and drawing charts. “System” follows your computer’s setting; on Windows that is Settings → Accessibility → Visual effects → Animation effects.'),
+          h('div', { class: 'small muted' }, 'Light or dark theme: the sun/moon button in the top-right corner.'))),
         panel('Keyboard', kv([['Command palette / search', h('span', null, h('kbd', null, 'Ctrl'), ' ', h('kbd', null, 'K'))], ['Companion', h('span', null, h('kbd', null, 'Ctrl'), ' ', h('kbd', null, '.'))],
-          ['Close dialogs', h('kbd', null, 'Esc')], ['Toggle sidebar', h('span', null, h('kbd', null, 'Ctrl'), ' ', h('kbd', null, 'B'))]])),
+          ['Close dialogs', h('kbd', null, 'Esc')]])),
         panel('Risk limits', pre(st.risk), { foot: 'Read-only. Edit config/local.yaml and restart; nothing at runtime writes risk configuration.' }),
         panel('Not available in this build', h('ul', { style: { margin: 0, paddingLeft: '18px' } },
           ['Enabling execution or live trading from the UI', 'Editing risk limits at runtime', 'Cancelling orders / closing positions',

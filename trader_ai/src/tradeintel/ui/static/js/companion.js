@@ -33,7 +33,7 @@ export function createCompanion({ act, getState, route }) {
   const el = h('div', null, wrap, panelEl);
 
   // {l|r, b}: distance from the nearer side edge and the bottom, so the orb keeps its corner on resize.
-  // Default: the sidebar's empty bottom corner (above Settings), where it covers no page content.
+  // Default: bottom-right corner, inside the page's bottom padding so it covers no content.
   let pos = store.get('cmp.anchor2', null);
   let pinned = store.get('cmp.pinned', false);
   let busy = null;          // 'thinking' | 'working' | null
@@ -47,7 +47,7 @@ export function createCompanion({ act, getState, route }) {
     return { x: Math.min(Math.max(p.x, MARGIN), innerWidth - SIZE - MARGIN), y: Math.min(Math.max(p.y, MARGIN), innerHeight - SIZE - MARGIN) };
   }
   // pos stays null until the user drags, so the default follows the window's bottom-right corner
-  const cur = () => clamp(pos ? { x: pos.l != null ? pos.l : innerWidth - pos.r, y: innerHeight - pos.b } : { x: MARGIN, y: innerHeight - SIZE - 110 });
+  const cur = () => clamp(pos ? { x: pos.l != null ? pos.l : innerWidth - pos.r, y: innerHeight - pos.b } : { x: innerWidth - SIZE - 24, y: innerHeight - SIZE - 24 });
   const anchor = (p) => (p.x + SIZE / 2 < innerWidth / 2 ? { l: p.x, b: innerHeight - p.y } : { r: innerWidth - p.x, b: innerHeight - p.y });
   function place() {
     const p = cur();

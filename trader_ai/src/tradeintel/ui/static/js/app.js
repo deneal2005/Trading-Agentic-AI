@@ -354,7 +354,7 @@ window.addEventListener('hashchange', mount);
 
 buildShell();
 document.documentElement.dataset.motion = store.get('motion', 'full');  // animations on by default, even when the OS asks for reduced motion
-setTheme(store.get('theme', 'light'));
+setTheme(store.get('theme', 'dark'));
 companion = createCompanion({ act, getState: () => hub.state, route: () => app.route });
 document.body.append(companion.el);
 content.replaceChildren(h('div', { class: 'state' }, h('span', { class: 'spin' }), h('div', { class: 't' }, 'Connecting to the backend…'), h('div', { class: 'small' }, 'The first broker read can take a few seconds.')));

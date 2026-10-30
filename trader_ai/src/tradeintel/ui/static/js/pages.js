@@ -1056,7 +1056,7 @@ export function settings(ctx) {
             ['Desktop floating', h('span', { class: 'dim' }, 'in-app only: this is a web app and can\'t float over other Windows apps')]]))),
         panel('Appearance', h('div', { class: 'stack' },
           h('div', { class: 'row' }, h('span', { style: { minWidth: '70px' } }, 'Motion'),
-            segCtl('Motion', [['System', 'system'], ['Full', 'full'], ['Reduced', 'reduced']], () => store.get('motion', 'system'), (v) => {
+            segCtl('Motion', [['System', 'system'], ['Full', 'full'], ['Reduced', 'reduced']], () => store.get('motion', 'full'), (v) => {
               store.set('motion', v);
               document.documentElement.dataset.motion = v;
             })),

@@ -353,7 +353,7 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('hashchange', mount);
 
 buildShell();
-document.documentElement.dataset.motion = store.get('motion', 'system');
+document.documentElement.dataset.motion = store.get('motion', 'full');  // animations on by default, even when the OS asks for reduced motion
 setTheme(store.get('theme', 'light'));
 companion = createCompanion({ act, getState: () => hub.state, route: () => app.route });
 document.body.append(companion.el);
